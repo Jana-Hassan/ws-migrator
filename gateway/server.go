@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"time"
+	"fmt"
 
 	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/gorilla/websocket"
@@ -20,6 +21,7 @@ type Server struct {
 	pool       *Pool
 	registry   *Registry
 	store      *store.Store
+	grpcClient *GRPCClient
 }
 
 var upgrader = websocket.Upgrader{   //converts http req to ws connection
@@ -35,6 +37,7 @@ func NewServer(pool *Pool, s *store.Store) *Server {
 		pool:     pool,
 		registry:   NewRegistry(),
 		store:      s,
+		grpcClient: NewGRPCClient(pool),
 	}
 }
 
@@ -100,6 +103,28 @@ func (s *Server) Start(addr string) error {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/admin/checkpoint", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.URL.Query().Get("session_id")
+		if sessionID == "" {
+			http.Error(w, "missing session_id", http.StatusBadRequest)
+			return
+		}
+
+		session, ok := s.registry.Get(sessionID)
+		if !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
+
+		resp, err := s.grpcClient.Checkpoint(r.Context(), session.WorkerID, sessionID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("checkpoint failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		fmt.Fprintf(w, "checkpoint ok=%v state_bytes=%d\n", resp.Ok, len(resp.State))
+	})
+
 
 	log.Printf("gateway starting on %s", addr)
 	return http.ListenAndServe(addr, mux)
