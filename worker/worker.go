@@ -12,6 +12,8 @@ import (
 
 type Worker struct {
 	id        string
+	wsAddr    string
+	grpcAddr  string
 	sessions  *sessionRegistry
 	onMessage func(sessionID string, msg []byte) []byte
 	onCreate  func(sessionID string) State
@@ -34,6 +36,8 @@ var upgrader = websocket.Upgrader{
 func NewWorker(cfg Config) *Worker {
 	return &Worker{
 		id:       cfg.ID,
+		wsAddr:   cfg.WSAddr,
+		grpcAddr: cfg.GRPCAddr,
 		sessions: newSessionRegistry(),
 	}
 }
@@ -46,23 +50,22 @@ func (w *Worker) OnSessionCreate(fn func(sessionID string) State) {
 	w.onCreate = fn
 }
 
-func (w *Worker) Start(cfg Config) error {
-	grpcErrCh := make(chan error, 1)
+func (w *Worker) Start() error {
+	errCh := make(chan error, 2)
+
 	go func() {
-		grpcErrCh <- w.startGRPC(cfg.GRPCAddr)
+		errCh <- w.startGRPC()
 	}()
 
 	go func() {
-		if err := <-grpcErrCh; err != nil {
-			log.Fatalf("[worker-%s] gRPC server failed: %v", w.id, err)
-		}
+		errCh <- w.startWS()
 	}()
-
-	return w.startWS(cfg.WSAddr)
+	
+	return <-errCh
 }
 
-func (w *Worker) startGRPC(addr string) error {
-	lis, err := net.Listen("tcp", addr)
+func (w *Worker) startGRPC() error {
+	lis, err := net.Listen("tcp", w.grpcAddr)
 	if err != nil {
 		return err
 	}
@@ -70,11 +73,11 @@ func (w *Worker) startGRPC(addr string) error {
 	srv := grpc.NewServer()
 	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions))
 
-	log.Printf("[worker-%s] gRPC server starting on %s", w.id, addr)
+	log.Printf("[worker-%s] gRPC server starting on %s", w.id, w.grpcAddr)
 	return srv.Serve(lis)
 }
 
-func (w *Worker) startWS(addr string) error {
+func (w *Worker) startWS() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", w.handleConnection)
 	mux.HandleFunc("/health", func(wr http.ResponseWriter, r *http.Request) {
@@ -82,8 +85,8 @@ func (w *Worker) startWS(addr string) error {
 		wr.Write([]byte("ok"))
 	})
 
-	log.Printf("[worker-%s] WebSocket server starting on %s", w.id, addr)
-	return http.ListenAndServe(addr, mux)
+	log.Printf("[worker-%s] WebSocket server starting on %s", w.id, w.wsAddr)
+	return http.ListenAndServe(w.wsAddr, mux)
 }
 
 func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
@@ -108,9 +111,14 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		s.state = w.onCreate(sessionID)
 	}
 
-	w.sessions.add(s)
-	defer w.sessions.remove(sessionID)
+	if err := w.sessions.add(s); err != nil {
+		log.Printf("[worker-%s] rejected session %s: %v", w.id, sessionID, err)
+		conn.Close()
+		return
+	}
+
 	defer conn.Close()
+	defer w.sessions.remove(sessionID)
 
 	log.Printf("[worker-%s] session %s connected", w.id, sessionID)
 
@@ -127,12 +135,14 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		s.mu.Lock()
 		var response []byte
 		if w.onMessage != nil {
 			response = w.onMessage(sessionID, msg)
 		} else {
 			response = msg
 		}
+		s.mu.Unlock()
 
 		if err := conn.WriteMessage(messageType, response); err != nil {
 			log.Printf("[worker-%s] write error: %v", w.id, err)

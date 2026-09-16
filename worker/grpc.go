@@ -1,12 +1,14 @@
 package worker
 
 import (
+	"context"
 	"log"
 	"time"
-	"context"
 
 	migratorpb "github.com/Jana-Hassan/ws-migrator/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type grpcServer struct {
@@ -25,12 +27,11 @@ func newGRPCServer(workerID string, sessions *sessionRegistry) *grpcServer {
 func (g *grpcServer) Checkpoint(ctx context.Context, req *migratorpb.CheckpointRequest) (*migratorpb.CheckpointResponse, error) {
 	session, ok := g.sessions.get(req.SessionId)
 	if !ok {
-		return &migratorpb.CheckpointResponse{
-			SessionId: req.SessionId,
-			Ok:        false,
-			Error:     "session not found",
-		}, nil
+		return nil, status.Errorf(codes.NotFound, "session %s not found", req.SessionId)
 	}
+
+	session.mu.Lock()
+	defer session.mu.Unlock()
 
 	var stateBytes []byte
 	if session.state != nil {

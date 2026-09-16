@@ -8,14 +8,14 @@ import (
 )
 
 func main() {
-		cfg := worker.Config{
+	cfg := worker.Config{
 		ID:       getEnv("WORKER_ID", "1"),
 		WSAddr:   getEnv("LISTEN_ADDR", ":8081"),
 		GRPCAddr: getEnv("GRPC_ADDR", ":9091"),
 	}
 
 	w := worker.NewWorker(cfg)
-	if err := w.Start(cfg);
+	if err := w.Start();
 	 err != nil {
 		log.Fatalf("worker failed: %v", err)
 	}

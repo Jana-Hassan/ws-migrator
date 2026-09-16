@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -12,6 +13,7 @@ type State interface {
 }
 
 type session struct {
+	mu    sync.Mutex
 	id   string
 	conn *websocket.Conn
 	state State
@@ -28,10 +30,14 @@ func newSessionRegistry() *sessionRegistry {
 	}
 }
 
-func (r *sessionRegistry) add(s *session) {
+func (r *sessionRegistry) add(s *session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, ok := r.sessions[s.id]; ok {
+		return fmt.Errorf("session %s already exists", s.id)
+	}
 	r.sessions[s.id] = s
+	return nil
 }
 
 func (r *sessionRegistry) remove(id string) {
