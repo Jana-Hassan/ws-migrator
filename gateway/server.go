@@ -17,7 +17,7 @@ const (
 )
 
 type Server struct {
-	workerAddr string
+	pool       *Pool
 	registry   *Registry
 	store      *store.Store
 }
@@ -30,9 +30,9 @@ var upgrader = websocket.Upgrader{   //converts http req to ws connection
 	},
 }
 
-func NewServer(workerAddr string, s *store.Store) *Server {
+func NewServer(pool *Pool, s *store.Store) *Server {
 	return &Server{
-		workerAddr: workerAddr,
+		pool:     pool,
 		registry:   NewRegistry(),
 		store:      s,
 	}
@@ -105,10 +105,10 @@ func (s *Server) Start(addr string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
-func (s *Server) startSession(id string, clientConn, workerConn *websocket.Conn) *Session {
+func (s *Server) startSession(id, workerID string, clientConn, workerConn *websocket.Conn) *Session {
 	session := &Session{
 		ID:          id,
-		WorkerID:    "worker-1",
+		WorkerID:    workerID,
 		ClientConn:  clientConn,
 		WorkerConn:  workerConn,
 		ConnectedAt: time.Now(),
@@ -125,7 +125,7 @@ func (s *Server) startSession(id string, clientConn, workerConn *websocket.Conn)
 		log.Printf("failed to save session %s to Redis: %v", session.ID, err)
 	}
 
-	log.Printf("session %s started, total active: %d", session.ID, s.registry.Count())
+	log.Printf("session %s started on %s, total active: %d", session.ID, workerID, s.registry.Count())
 	return session
 }
 
@@ -150,8 +150,21 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := NewSessionID()
 
-	workerURL := s.workerAddr + "?session_id=" + sessionID
-	workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
+worker, ok := s.pickWorker()
+if !ok {
+	log.Printf("no workers available")
+	clientConn.WriteMessage(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(
+			websocket.CloseInternalServerErr,
+			"no worker available",
+		),
+	)
+	return
+}
+
+workerURL := worker.WSAddr + "?session_id=" + sessionID
+workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 	if err != nil {
 		log.Printf("failed to connect to worker: %v", err)
 		clientConn.WriteMessage(
@@ -165,12 +178,12 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	}
 	defer workerConn.Close()
 
-	log.Printf("connected to worker at %s", s.workerAddr)
+	log.Printf("connected to worker %s at %s", worker.ID, worker.WSAddr)
 
 	clientConn.SetReadLimit(512 * 1024)
 	workerConn.SetReadLimit(512 * 1024)
 
-	session := s.startSession(sessionID, clientConn, workerConn)
+	session := s.startSession(sessionID, worker.ID,clientConn, workerConn)
 	defer s.endSession(session)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,4 +196,24 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	s.pipe(ctx, cancel, workerConn, clientConn, "worker→client")
 
 	log.Printf("connection closed for %s", r.RemoteAddr)
+}
+
+func (s *Server) pickWorker() (*WorkerInfo, bool) {
+	workers := s.pool.All()
+	if len(workers) == 0 {
+		return nil, false
+	}
+
+	var best *WorkerInfo
+	minSessions := -1
+
+	for _, w := range workers {
+		count := len(s.registry.AllOnWorker(w.ID))
+		if minSessions == -1 || count < minSessions {
+			minSessions = count
+			best = w
+		}
+	}
+
+	return best, true
 }
