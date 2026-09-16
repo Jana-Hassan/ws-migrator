@@ -7,12 +7,14 @@ import (
 	"log"
 
 	"github.com/gorilla/websocket"   //handles websocket protocol
+	"github.com/Jana-Hassan/ws-migrator/store"
 
 )
 
 type Server struct {
 	workerAddr string
 	registry   *Registry
+	store      *store.Store
 }
 
 var upgrader = websocket.Upgrader{   //converts http req to ws connection
@@ -23,10 +25,11 @@ var upgrader = websocket.Upgrader{   //converts http req to ws connection
 	},
 }
 
-func NewServer(workerAddr string) *Server {
+func NewServer(workerAddr string, s *store.Store) *Server {
 	return &Server{
 		workerAddr: workerAddr,
 		registry:   NewRegistry(),
+		store:      s,
 	}
 }
 
@@ -82,6 +85,16 @@ func (s *Server) startSession(clientConn, workerConn *websocket.Conn) *Session {
 		ConnectedAt: time.Now(),
 	}
 	s.registry.Add(session)
+	err := s.store.Save(context.Background(), &store.SessionData{
+		ID:          session.ID,
+		WorkerID:    session.WorkerID,
+		ConnectedAt: session.ConnectedAt,
+		Status:      "active",
+	})
+	if err != nil {
+		log.Printf("failed to save session %s to Redis: %v", session.ID, err)
+	}
+
 	log.Printf("session %s started, total active: %d", 
 		session.ID, s.registry.Count())
 	return session
@@ -89,8 +102,11 @@ func (s *Server) startSession(clientConn, workerConn *websocket.Conn) *Session {
 
 func (s *Server) endSession(session *Session) {
 	s.registry.Remove(session.ID)
-	log.Printf("session %s ended, total active: %d", 
-		session.ID, s.registry.Count())
+	err := s.store.Delete(context.Background(), session.ID)
+	if err != nil {
+		log.Printf("failed to delete session %s from Redis: %v", session.ID, err)
+	}
+	log.Printf("session %s ended, total active: %d", session.ID, s.registry.Count())
 }
 
 func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
