@@ -76,15 +76,16 @@ func (s *Server) Start(addr string) error {
     return http.ListenAndServe(addr, mux)
 } 
 
-func (s *Server) startSession(clientConn, workerConn *websocket.Conn) *Session {
+func (s *Server) startSession(id string, clientConn, workerConn *websocket.Conn) *Session {
 	session := &Session{
-		ID:          NewSessionID(),
+		ID:          id,
 		WorkerID:    "worker-1",
 		ClientConn:  clientConn,
 		WorkerConn:  workerConn,
 		ConnectedAt: time.Now(),
 	}
 	s.registry.Add(session)
+
 	err := s.store.Save(context.Background(), &store.SessionData{
 		ID:          session.ID,
 		WorkerID:    session.WorkerID,
@@ -95,8 +96,7 @@ func (s *Server) startSession(clientConn, workerConn *websocket.Conn) *Session {
 		log.Printf("failed to save session %s to Redis: %v", session.ID, err)
 	}
 
-	log.Printf("session %s started, total active: %d", 
-		session.ID, s.registry.Count())
+	log.Printf("session %s started, total active: %d", session.ID, s.registry.Count())
 	return session
 }
 
@@ -119,7 +119,12 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("client connected from %s", r.RemoteAddr)
 
-	workerConn, _, err := websocket.DefaultDialer.Dial(s.workerAddr, nil)
+	//generate session id first then pass it to the worker
+	sessionID := NewSessionID()
+
+	//dial worker with session id
+	workerURL := s.workerAddr + "?session_id=" + sessionID
+	workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 	if err != nil {
 		log.Printf("failed to connect to worker: %v", err)
 		clientConn.WriteMessage(
@@ -138,7 +143,8 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	clientConn.SetReadLimit(512 * 1024)
 	workerConn.SetReadLimit(512 * 1024)
 
-	session := s.startSession(clientConn, workerConn)
+	//create session with pre generated id
+	session := s.startSession(sessionID, clientConn, workerConn)
 	defer s.endSession(session)
 
 	ctx, cancel := context.WithCancel(context.Background())
