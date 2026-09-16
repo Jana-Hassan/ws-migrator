@@ -2,13 +2,18 @@ package gateway
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
-	"log"
 
-	"github.com/gorilla/websocket"   //handles websocket protocol
 	"github.com/Jana-Hassan/ws-migrator/store"
+	"github.com/gorilla/websocket"
+)
 
+const (
+	pongWait   = 60 * time.Second
+	pingPeriod = 50 * time.Second
+	writeWait  = 10 * time.Second
 )
 
 type Server struct {
@@ -33,48 +38,72 @@ func NewServer(workerAddr string, s *store.Store) *Server {
 	}
 }
 
+func (s *Server) pipe(ctx context.Context, cancel context.CancelFunc, src *websocket.Conn, dst *websocket.Conn, direction string) {
+	defer cancel() 
 
-func (s *Server) pipe(ctx context.Context, cancel context.CancelFunc, src *websocket.Conn, dst *websocket.Conn, direction string,) {
-    defer cancel() //when this pipe stops, stop the other one too
-  go func() {
-        <-ctx.Done()
-        src.SetReadDeadline(time.Now()) // expire immediately → unblocks ReadMessage
-    }()
+	go func() {
+		<-ctx.Done()
+		src.SetReadDeadline(time.Now())
+	}()
 
-    for {
-        src.SetReadDeadline(time.Now().Add(60 * time.Second))
+	src.SetReadDeadline(time.Now().Add(pongWait))
+	src.SetPongHandler(func(string) error {
+		return src.SetReadDeadline(time.Now().Add(pongWait))
+	})
 
-        messageType, message, err := src.ReadMessage()
-        if err != nil {
-            if websocket.IsUnexpectedCloseError(err,
-                websocket.CloseGoingAway,
-                websocket.CloseNormalClosure,
-            ) {
-                log.Printf("%s: unexpected error: %v", direction, err)
-            }
-            return
-        }
-        err = dst.WriteMessage(messageType, message)
-        if err != nil {
-            log.Printf("%s: write error: %v", direction, err)
-            return
-        }
+	for {
+		messageType, message, err := src.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err,
+				websocket.CloseGoingAway,
+				websocket.CloseNormalClosure,
+			) {
+				log.Printf("%s: unexpected error: %v", direction, err)
+			}
+			return
+		}
 
-        log.Printf("%s: forwarded %d bytes", direction, len(message))
-    }
+		src.SetReadDeadline(time.Now().Add(pongWait))
+
+		err = dst.WriteMessage(messageType, message)
+		if err != nil {
+			log.Printf("%s: write error: %v", direction, err)
+			return
+		}
+
+		log.Printf("%s: forwarded %d bytes", direction, len(message))
+	}
+}
+
+func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn, name string) {
+	ticker := time.NewTicker(pingPeriod)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait))
+			if err != nil {
+				log.Printf("%s: ping error: %v", name, err)
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) Start(addr string) error {
-    mux := http.NewServeMux()
-    mux.HandleFunc("/ws", s.HandleClient)
-    mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-        w.WriteHeader(http.StatusOK)
-        w.Write([]byte("ok"))
-    })
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", s.HandleClient)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
 
-    log.Printf("gateway starting on %s", addr)
-    return http.ListenAndServe(addr, mux)
-} 
+	log.Printf("gateway starting on %s", addr)
+	return http.ListenAndServe(addr, mux)
+}
 
 func (s *Server) startSession(id string, clientConn, workerConn *websocket.Conn) *Session {
 	session := &Session{
@@ -119,10 +148,8 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("client connected from %s", r.RemoteAddr)
 
-	//generate session id first then pass it to the worker
 	sessionID := NewSessionID()
 
-	//dial worker with session id
 	workerURL := s.workerAddr + "?session_id=" + sessionID
 	workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 	if err != nil {
@@ -143,12 +170,14 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	clientConn.SetReadLimit(512 * 1024)
 	workerConn.SetReadLimit(512 * 1024)
 
-	//create session with pre generated id
 	session := s.startSession(sessionID, clientConn, workerConn)
 	defer s.endSession(session)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	go s.keepAlive(ctx, clientConn, "client")
+	go s.keepAlive(ctx, workerConn, "worker")
 
 	go s.pipe(ctx, cancel, clientConn, workerConn, "client→worker")
 	s.pipe(ctx, cancel, workerConn, clientConn, "worker→client")
