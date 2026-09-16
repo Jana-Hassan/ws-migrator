@@ -1,0 +1,51 @@
+syntax = "proto3";
+
+package migrator.v1;
+
+option go_package = "github.com/Jana-Hassan/ws-migrator/proto;migratorpb";
+
+service WorkerService {
+  rpc Checkpoint(CheckpointRequest) returns (CheckpointResponse);
+  rpc HealthStream(HealthStreamRequest) returns (stream HealthUpdate);
+}
+
+service GatewayService {
+  rpc Drain(DrainRequest) returns (DrainResponse);
+}
+
+message CheckpointRequest {
+  string session_id = 1;
+}
+
+message CheckpointResponse {
+  string session_id = 1;
+  bytes state = 2;
+  bool ok = 3;
+  string error = 4;
+}
+
+message DrainRequest {
+  string worker_id = 1;
+  string reason = 2;
+}
+
+message DrainResponse {
+  bool accepted = 1;
+  int32 session_count = 2;
+}
+
+message HealthStreamRequest {}
+
+message HealthUpdate {
+  string worker_id = 1;
+  int32 session_count = 2;
+  WorkerStatus status = 3;
+  int64 unix_ms = 4;
+}
+
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED = 0;
+  WORKER_STATUS_SERVING = 1;
+  WORKER_STATUS_DRAINING = 2;
+  WORKER_STATUS_STOPPING = 3;
+}
