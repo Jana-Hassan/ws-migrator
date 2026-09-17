@@ -16,6 +16,8 @@ type Session struct {
 	ClientConn  *websocket.Conn
 	WorkerConn  *websocket.Conn
 	ConnectedAt time.Time
+	mu          sync.Mutex
+	migrateChannel   chan string
 }
 
 //tracks all active sessions in the gateway
@@ -73,4 +75,12 @@ func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return len(r.sessions)
+}
+
+func (r *Registry) UpdateWorker(sessionID, workerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.sessions[sessionID]; ok {
+		s.WorkerID = workerID
+	}
 }
