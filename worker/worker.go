@@ -15,7 +15,7 @@ type Worker struct {
 	wsAddr    string
 	grpcAddr  string
 	sessions  *sessionRegistry
-	onMessage func(sessionID string, msg []byte) []byte
+	onMessage func(sessionID string, state State, msg []byte) []byte
 	onCreate  func(sessionID string) State
 }
 
@@ -42,7 +42,7 @@ func NewWorker(cfg Config) *Worker {
 	}
 }
 
-func (w *Worker) OnMessage(fn func(sessionID string, msg []byte) []byte) {
+func (w *Worker) OnMessage(fn func(sessionID string, state State, msg []byte) []byte) {
 	w.onMessage = fn
 }
 //optionally provides this
@@ -71,7 +71,7 @@ func (w *Worker) startGRPC() error {
 	}
 
 	srv := grpc.NewServer()
-	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions))
+	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions, w.onCreate))
 
 	log.Printf("[worker-%s] gRPC server starting on %s", w.id, w.grpcAddr)
 	return srv.Serve(lis)
@@ -107,7 +107,9 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		conn: conn,
 	}
 
-	if w.onCreate != nil {
+	if state, ok := w.sessions.take(sessionID); ok {
+		s.state = state
+	} else if w.onCreate != nil {
 		s.state = w.onCreate(sessionID)
 	}
 
@@ -138,7 +140,7 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		var response []byte
 		if w.onMessage != nil {
-			response = w.onMessage(sessionID, msg)
+			response = w.onMessage(sessionID, s.state, msg)
 		} else {
 			response = msg
 		}

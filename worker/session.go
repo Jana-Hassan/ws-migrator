@@ -22,12 +22,28 @@ type session struct {
 type sessionRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]*session
+	pending  map[string]State
 }
 
 func newSessionRegistry() *sessionRegistry {
 	return &sessionRegistry{
 		sessions: make(map[string]*session),
+		pending:  make(map[string]State),
 	}
+}
+
+func (r *sessionRegistry) stage(id string, state State) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pending[id] = state
+}
+
+func (r *sessionRegistry) take(id string) (State, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, ok := r.pending[id]
+	delete(r.pending, id)
+	return state, ok
 }
 
 func (r *sessionRegistry) add(s *session) error {

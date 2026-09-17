@@ -15,13 +15,34 @@ type grpcServer struct {
 	migratorpb.UnimplementedWorkerServiceServer
 	sessions *sessionRegistry
 	workerID string
+	onCreate func(sessionID string) State
 }
 
-func newGRPCServer(workerID string, sessions *sessionRegistry) *grpcServer {
+func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(sessionID string) State) *grpcServer {
 	return &grpcServer{
 		workerID: workerID,
 		sessions: sessions,
+		onCreate: onCreate,
 	}
+}
+
+func (g *grpcServer) Restore(ctx context.Context, req *migratorpb.RestoreRequest) (*migratorpb.RestoreResponse, error) {
+	if len(req.State) == 0 {
+		return &migratorpb.RestoreResponse{Ok: true}, nil
+	}
+	if g.onCreate == nil {
+		return &migratorpb.RestoreResponse{Ok: false, Error: "worker has no session state factory"}, nil
+	}
+
+	state := g.onCreate(req.SessionId)
+	if err := state.Restore(req.State); err != nil {
+		return &migratorpb.RestoreResponse{Ok: false, Error: err.Error()}, nil
+	}
+
+	g.sessions.stage(req.SessionId, state)
+	log.Printf("[worker-%s] restored session %s", g.workerID, req.SessionId)
+
+	return &migratorpb.RestoreResponse{Ok: true}, nil
 }
 
 func (g *grpcServer) Checkpoint(ctx context.Context, req *migratorpb.CheckpointRequest) (*migratorpb.CheckpointResponse, error) {

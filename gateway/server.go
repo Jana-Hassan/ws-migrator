@@ -296,10 +296,12 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 			return false
 
 		case targetWorkerID := <-session.migrateChannel:
-			result := s.migrate(session, targetWorkerID)
+			if !s.migrate(session, targetWorkerID) {
+				continue
+			}
 			workerConn.Close()
 			<-workerDone
-			return result
+			return true
 		}
 	}
 }
@@ -331,6 +333,11 @@ func (s *Server) pipeMessages(src, dst *websocket.Conn, direction string) {
 
 func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 	log.Printf("migrating session %s from %s to %s", session.ID, session.WorkerID, targetWorkerID)
+	if targetWorkerID == session.WorkerID {
+		log.Printf("migration failed: session %s already on %s", session.ID, targetWorkerID)
+		return false
+	}
+
 	target, ok := s.pool.Get(targetWorkerID)
 	if !ok {
 		log.Printf("migration failed: target worker %s not in pool", targetWorkerID)
@@ -338,6 +345,9 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 	}
 
 	ctx := context.Background()
+
+	s.saveSession(ctx, session, "migrating")
+	defer s.saveSession(ctx, session, "active")
 
 	resp, err := s.grpcClient.Checkpoint(ctx, session.WorkerID, session.ID)
 	if err != nil {
@@ -349,14 +359,13 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 		return false
 	}
 
-	err = s.store.Save(ctx, &store.SessionData{
-		ID:          session.ID,
-		WorkerID:    targetWorkerID,
-		ConnectedAt: session.ConnectedAt,
-		Status:      "migrating",
-	})
+	restored, err := s.grpcClient.Restore(ctx, targetWorkerID, session.ID, resp.State)
 	if err != nil {
-		log.Printf("migration failed: could not save state: %v", err)
+		log.Printf("migration failed: restore error: %v", err)
+		return false
+	}
+	if !restored.Ok {
+		log.Printf("migration failed: restore not ok: %s", restored.Error)
 		return false
 	}
 
@@ -376,16 +385,21 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 
 	s.registry.UpdateWorker(session.ID, targetWorkerID)
 
-	err = s.store.Save(ctx, &store.SessionData{
-		ID:          session.ID,
-		WorkerID:    targetWorkerID,
-		ConnectedAt: session.ConnectedAt,
-		Status:      "active",
-	})
-	if err != nil {
-		log.Printf("warning: could not update status to active: %v", err)
-	}
-
 	log.Printf("migration complete: session %s now on %s", session.ID, targetWorkerID)
 	return true
+}
+
+func (s *Server) saveSession(ctx context.Context, session *Session, status string) {
+	session.mu.Lock()
+	data := &store.SessionData{
+		ID:          session.ID,
+		WorkerID:    session.WorkerID,
+		ConnectedAt: session.ConnectedAt,
+		Status:      status,
+	}
+	session.mu.Unlock()
+
+	if err := s.store.Save(ctx, data); err != nil {
+		log.Printf("failed to save session %s as %s: %v", session.ID, status, err)
+	}
 }

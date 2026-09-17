@@ -71,6 +71,21 @@ func (c *GRPCClient) Checkpoint(ctx context.Context, workerID, sessionID string)
 	})
 }
 
+func (c *GRPCClient) Restore(ctx context.Context, workerID, sessionID string, state []byte) (*migratorpb.RestoreResponse, error) {
+	client, err := c.connect(workerID)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return client.Restore(ctx, &migratorpb.RestoreRequest{
+		SessionId: sessionID,
+		State:     state,
+	})
+}
+
 func (c *GRPCClient) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
