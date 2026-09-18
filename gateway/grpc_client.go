@@ -26,19 +26,19 @@ func NewGRPCClient(pool *Pool) *GRPCClient {
 
 func (c *GRPCClient) connect(workerID string) (migratorpb.WorkerServiceClient, error) {
 	c.mu.RLock()
-	conn, ok := c.conns[workerID]   //check if its already connected
+	conn, ok := c.conns[workerID] //check if its already connected
 	c.mu.RUnlock()
 
 	if ok {
 		return migratorpb.NewWorkerServiceClient(conn), nil
 	}
 
-	worker, ok := c.pool.Get(workerID) 
+	worker, ok := c.pool.Get(workerID)
 	if !ok {
 		return nil, fmt.Errorf("worker %s not in pool", workerID)
 	}
 
-	c.mu.Lock()       //not connected so need to create
+	c.mu.Lock() //not connected so need to create
 	defer c.mu.Unlock()
 
 	if conn, ok := c.conns[workerID]; ok {

@@ -16,8 +16,7 @@ func main() {
 	}
 
 	w := worker.NewWorker(cfg)
-	if err := w.Start();
-	 err != nil {
+	if err := w.Start(); err != nil {
 		log.Fatalf("worker failed: %v", err)
 	}
 }

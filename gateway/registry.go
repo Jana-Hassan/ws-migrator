@@ -9,18 +9,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-//info about one active client connection
+// info about one active client connection
 type Session struct {
-	ID          string
-	WorkerID    string
-	ClientConn  *websocket.Conn
-	WorkerConn  *websocket.Conn
-	ConnectedAt time.Time
-	mu          sync.Mutex
-	migrateChannel   chan string
+	ID             string
+	WorkerID       string
+	ClientConn     *websocket.Conn
+	WorkerConn     *websocket.Conn
+	ConnectedAt    time.Time
+	mu             sync.Mutex
+	migrateChannel chan string
 }
 
-//tracks all active sessions in the gateway
+// tracks all active sessions in the gateway
 type Registry struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
@@ -42,13 +42,14 @@ func (r *Registry) Add(session *Session) {
 	r.sessions[session.ID] = session
 }
 
-//deletes a session when client disconnects
+// deletes a session when client disconnects
 func (r *Registry) Remove(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.sessions, id)
 }
-//gets session by id
+
+// gets session by id
 func (r *Registry) Get(id string) (*Session, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -56,7 +57,7 @@ func (r *Registry) Get(id string) (*Session, bool) {
 	return session, ok
 }
 
-//returns all sessions currently on a specific worker
+// returns all sessions currently on a specific worker
 func (r *Registry) AllOnWorker(workerID string) []*Session {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -70,7 +71,7 @@ func (r *Registry) AllOnWorker(workerID string) []*Session {
 	return result
 }
 
-//returns total # active sessions
+// returns total # active sessions
 func (r *Registry) Count() int {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

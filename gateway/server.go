@@ -2,10 +2,10 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
-	"fmt"
 
 	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/gorilla/websocket"
@@ -24,24 +24,22 @@ type Server struct {
 	grpcClient *GRPCClient
 }
 
-var upgrader = websocket.Upgrader{   //converts http req to ws connection
+var upgrader = websocket.Upgrader{ //converts http req to ws connection
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true       //allow all (for now) -- is it allowed? (for later)
+		return true //allow all (for now) -- is it allowed? (for later)
 	},
 }
 
 func NewServer(pool *Pool, s *store.Store) *Server {
 	return &Server{
-		pool:     pool,
+		pool:       pool,
 		registry:   NewRegistry(),
 		store:      s,
 		grpcClient: NewGRPCClient(pool),
 	}
 }
-
-
 
 func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn, name string) {
 	ticker := time.NewTicker(pingPeriod)
@@ -96,38 +94,38 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	mux.HandleFunc("/admin/migrate", func(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.URL.Query().Get("session_id")
-	targetWorker := r.URL.Query().Get("worker")
-	if sessionID == "" || targetWorker == "" {
-		http.Error(w, "missing session_id or worker", http.StatusBadRequest)
-		return
-	}
+		sessionID := r.URL.Query().Get("session_id")
+		targetWorker := r.URL.Query().Get("worker")
+		if sessionID == "" || targetWorker == "" {
+			http.Error(w, "missing session_id or worker", http.StatusBadRequest)
+			return
+		}
 
-	session, ok := s.registry.Get(sessionID)
-	if !ok {
-		http.Error(w, "session not found", http.StatusNotFound)
-		return
-	}
+		session, ok := s.registry.Get(sessionID)
+		if !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
 
-	select {
-	case session.migrateChannel <- targetWorker:
-		fmt.Fprintf(w, "migration triggered for %s to %s\n", sessionID, targetWorker)
-	default:
-		http.Error(w, "migration already in progress", http.StatusConflict)
-	}
-})
+		select {
+		case session.migrateChannel <- targetWorker:
+			fmt.Fprintf(w, "migration triggered for %s to %s\n", sessionID, targetWorker)
+		default:
+			http.Error(w, "migration already in progress", http.StatusConflict)
+		}
+	})
 
 	return mux
 }
 
 func (s *Server) startSession(id, workerID string, clientConn, workerConn *websocket.Conn) *Session {
 	session := &Session{
-		ID:          id,
-		WorkerID:    workerID,
-		ClientConn:  clientConn,
-		WorkerConn:  workerConn,
-		ConnectedAt: time.Now(),
-		migrateChannel:   make(chan string, 1),
+		ID:             id,
+		WorkerID:       workerID,
+		ClientConn:     clientConn,
+		WorkerConn:     workerConn,
+		ConnectedAt:    time.Now(),
+		migrateChannel: make(chan string, 1),
 	}
 	s.registry.Add(session)
 
@@ -192,7 +190,6 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
-
 
 	log.Printf("connected to worker %s at %s", worker.ID, worker.WSAddr)
 

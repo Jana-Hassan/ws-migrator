@@ -2,7 +2,7 @@ package main
 
 import (
 	"log"
-	
+
 	"context"
 	"os"
 	"strings"
@@ -53,7 +53,7 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
-} 
+}
 
 func parseWorkers(raw string) []*gateway.WorkerInfo {
 	var workers []*gateway.WorkerInfo

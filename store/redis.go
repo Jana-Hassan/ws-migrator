@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	sessionPrefix = "session:"      
-	sessionTTL    = 24 * time.Hour  
+	sessionPrefix = "session:"
+	sessionTTL    = 24 * time.Hour
 )
 
 type SessionData struct {
@@ -32,7 +32,7 @@ func New(addr string) *Store {
 	}
 }
 
-func (s *Store) key(sessionID string) string {  //builds  redis key for a session
+func (s *Store) key(sessionID string) string { //builds  redis key for a session
 	return fmt.Sprintf("%s%s", sessionPrefix, sessionID)
 }
 
@@ -40,10 +40,10 @@ func (s *Store) Save(ctx context.Context, data *SessionData) error {
 	key := s.key(data.ID)
 
 	err := s.client.HSet(ctx, key,
-		"id",           data.ID,
-		"worker_id",    data.WorkerID,
+		"id", data.ID,
+		"worker_id", data.WorkerID,
 		"connected_at", data.ConnectedAt.Format(time.RFC3339),
-		"status",       data.Status,
+		"status", data.Status,
 	).Err()
 	if err != nil {
 		return fmt.Errorf("save session %s: %w", data.ID, err)
@@ -57,7 +57,7 @@ func (s *Store) Save(ctx context.Context, data *SessionData) error {
 	return nil
 }
 
-//reads session data from redis by id
+// reads session data from redis by id
 func (s *Store) Load(ctx context.Context, sessionID string) (*SessionData, error) {
 	key := s.key(sessionID)
 
@@ -91,7 +91,7 @@ func (s *Store) Delete(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-//checks if redis is reachable
+// checks if redis is reachable
 func (s *Store) Ping(ctx context.Context) error {
 	return s.client.Ping(ctx).Err()
 }

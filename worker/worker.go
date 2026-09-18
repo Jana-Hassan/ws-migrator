@@ -64,7 +64,8 @@ func NewWorker(cfg Config) *Worker {
 func (w *Worker) OnMessage(fn func(sessionID string, state State, msg []byte) []byte) {
 	w.onMessage = fn
 }
-//optionally provides this
+
+// optionally provides this
 func (w *Worker) OnSessionCreate(fn func(sessionID string) State) {
 	w.onCreate = fn
 }

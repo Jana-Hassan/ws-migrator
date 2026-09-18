@@ -14,8 +14,8 @@ type State interface {
 
 type session struct {
 	mu    sync.Mutex
-	id   string
-	conn *websocket.Conn
+	id    string
+	conn  *websocket.Conn
 	state State
 }
 
