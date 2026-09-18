@@ -87,12 +87,12 @@ func (w *Worker) Start() error {
 	case err := <-errCh:
 		return err
 	case sig := <-signals:
-		w.drain(sig.String())
+		w.Drain(sig.String())
 		return nil
 	}
 }
 
-func (w *Worker) drain(reason string) {
+func (w *Worker) Drain(reason string) {
 	if w.gatewayAddr == "" {
 		log.Printf("[worker-%s] no gateway address set, shutting down with %d sessions", w.id, w.sessions.count())
 		return
@@ -106,17 +106,20 @@ func (w *Worker) drain(reason string) {
 	defer client.close()
 
 	deadline := time.Now().Add(w.drainTimeout)
-	for time.Now().Before(deadline) {
-		if w.sessions.count() == 0 {
-			log.Printf("[worker-%s] drained, shutting down", w.id)
-			return
-		}
-
+	for {
 		resp, err := client.drain(w.id, reason)
 		if err != nil {
 			log.Printf("[worker-%s] drain call failed: %v", w.id, err)
 		} else if !resp.Accepted {
 			log.Printf("[worker-%s] gateway could not place all %d sessions", w.id, resp.SessionCount)
+		}
+
+		if w.sessions.count() == 0 {
+			log.Printf("[worker-%s] drained, shutting down", w.id)
+			return
+		}
+		if time.Now().After(deadline) {
+			break
 		}
 
 		time.Sleep(drainPollInterval)
@@ -131,14 +134,22 @@ func (w *Worker) startGRPC() error {
 		return err
 	}
 
+	log.Printf("[worker-%s] gRPC server starting on %s", w.id, w.grpcAddr)
+	return w.StartGRPCOn(lis)
+}
+
+func (w *Worker) StartGRPCOn(lis net.Listener) error {
 	srv := grpc.NewServer()
 	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions, w.onCreate))
-
-	log.Printf("[worker-%s] gRPC server starting on %s", w.id, w.grpcAddr)
 	return srv.Serve(lis)
 }
 
 func (w *Worker) startWS() error {
+	log.Printf("[worker-%s] WebSocket server starting on %s", w.id, w.wsAddr)
+	return http.ListenAndServe(w.wsAddr, w.Handler())
+}
+
+func (w *Worker) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", w.handleConnection)
 	mux.HandleFunc("/health", func(wr http.ResponseWriter, r *http.Request) {
@@ -146,8 +157,7 @@ func (w *Worker) startWS() error {
 		wr.Write([]byte("ok"))
 	})
 
-	log.Printf("[worker-%s] WebSocket server starting on %s", w.id, w.wsAddr)
-	return http.ListenAndServe(w.wsAddr, mux)
+	return mux
 }
 
 func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
