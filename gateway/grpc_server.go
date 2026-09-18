@@ -20,10 +20,13 @@ func (s *Server) StartGRPC(addr string) error {
 		return err
 	}
 
+	log.Printf("gateway gRPC starting on %s", addr)
+	return s.StartGRPCOn(lis)
+}
+
+func (s *Server) StartGRPCOn(lis net.Listener) error {
 	srv := grpc.NewServer()
 	migratorpb.RegisterGatewayServiceServer(srv, &grpcServer{server: s})
-
-	log.Printf("gateway gRPC starting on %s", addr)
 	return srv.Serve(lis)
 }
 

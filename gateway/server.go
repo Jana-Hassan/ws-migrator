@@ -62,6 +62,11 @@ func (s *Server) keepAlive(ctx context.Context, conn *websocket.Conn, name strin
 }
 
 func (s *Server) Start(addr string) error {
+	log.Printf("gateway starting on %s", addr)
+	return http.ListenAndServe(addr, s.Handler())
+}
+
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", s.HandleClient)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -112,9 +117,7 @@ func (s *Server) Start(addr string) error {
 	}
 })
 
-
-	log.Printf("gateway starting on %s", addr)
-	return http.ListenAndServe(addr, mux)
+	return mux
 }
 
 func (s *Server) startSession(id, workerID string, clientConn, workerConn *websocket.Conn) *Session {
