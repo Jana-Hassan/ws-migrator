@@ -28,9 +28,10 @@ func (c *Counter) Restore(data []byte) error {
 
 func main() {
 	cfg := worker.Config{
-		ID:       getEnv("WORKER_ID", "1"),
-		WSAddr:   getEnv("LISTEN_ADDR", ":8081"),
-		GRPCAddr: getEnv("GRPC_ADDR", ":9091"),
+		ID:          getEnv("WORKER_ID", "1"),
+		WSAddr:      getEnv("LISTEN_ADDR", ":8081"),
+		GRPCAddr:    getEnv("GRPC_ADDR", ":9091"),
+		GatewayAddr: getEnv("GATEWAY_ADDR", "localhost:9090"),
 	}
 
 	w := worker.NewWorker(cfg)

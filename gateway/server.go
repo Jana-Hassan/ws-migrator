@@ -163,7 +163,7 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := NewSessionID()
 
-	worker, ok := s.pickWorker()
+	worker, ok := s.pickWorker("")
 	if !ok {
 		log.Printf("no workers available")
 		clientConn.WriteMessage(
@@ -204,16 +204,14 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	log.Printf("connection closed for %s", r.RemoteAddr)
 }
 
-func (s *Server) pickWorker() (*WorkerInfo, bool) {
-	workers := s.pool.All()
-	if len(workers) == 0 {
-		return nil, false
-	}
-
+func (s *Server) pickWorker(exclude string) (*WorkerInfo, bool) {
 	var best *WorkerInfo
 	minSessions := -1
 
-	for _, w := range workers {
+	for _, w := range s.pool.All() {
+		if w.Draining || w.ID == exclude {
+			continue
+		}
 		count := len(s.registry.AllOnWorker(w.ID))
 		if minSessions == -1 || count < minSessions {
 			minSessions = count
@@ -221,7 +219,7 @@ func (s *Server) pickWorker() (*WorkerInfo, bool) {
 		}
 	}
 
-	return best, true
+	return best, best != nil
 }
 
 type clientMessage struct {
@@ -341,6 +339,10 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 	target, ok := s.pool.Get(targetWorkerID)
 	if !ok {
 		log.Printf("migration failed: target worker %s not in pool", targetWorkerID)
+		return false
+	}
+	if target.Draining {
+		log.Printf("migration failed: target worker %s is draining", targetWorkerID)
 		return false
 	}
 

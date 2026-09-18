@@ -4,25 +4,38 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	migratorpb "github.com/Jana-Hassan/ws-migrator/proto"
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 )
 
+const (
+	defaultDrainTimeout = 30 * time.Second
+	drainPollInterval   = 500 * time.Millisecond
+)
+
 type Worker struct {
-	id        string
-	wsAddr    string
-	grpcAddr  string
-	sessions  *sessionRegistry
-	onMessage func(sessionID string, state State, msg []byte) []byte
-	onCreate  func(sessionID string) State
+	id           string
+	wsAddr       string
+	grpcAddr     string
+	gatewayAddr  string
+	drainTimeout time.Duration
+	sessions     *sessionRegistry
+	onMessage    func(sessionID string, state State, msg []byte) []byte
+	onCreate     func(sessionID string) State
 }
 
 type Config struct {
-	ID       string
-	GRPCAddr string
-	WSAddr   string
+	ID           string
+	GRPCAddr     string
+	WSAddr       string
+	GatewayAddr  string
+	DrainTimeout time.Duration
 }
 
 var upgrader = websocket.Upgrader{
@@ -34,11 +47,17 @@ var upgrader = websocket.Upgrader{
 }
 
 func NewWorker(cfg Config) *Worker {
+	if cfg.DrainTimeout == 0 {
+		cfg.DrainTimeout = defaultDrainTimeout
+	}
+
 	return &Worker{
-		id:       cfg.ID,
-		wsAddr:   cfg.WSAddr,
-		grpcAddr: cfg.GRPCAddr,
-		sessions: newSessionRegistry(),
+		id:           cfg.ID,
+		wsAddr:       cfg.WSAddr,
+		grpcAddr:     cfg.GRPCAddr,
+		gatewayAddr:  cfg.GatewayAddr,
+		drainTimeout: cfg.DrainTimeout,
+		sessions:     newSessionRegistry(),
 	}
 }
 
@@ -60,8 +79,50 @@ func (w *Worker) Start() error {
 	go func() {
 		errCh <- w.startWS()
 	}()
-	
-	return <-errCh
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
+
+	select {
+	case err := <-errCh:
+		return err
+	case sig := <-signals:
+		w.drain(sig.String())
+		return nil
+	}
+}
+
+func (w *Worker) drain(reason string) {
+	if w.gatewayAddr == "" {
+		log.Printf("[worker-%s] no gateway address set, shutting down with %d sessions", w.id, w.sessions.count())
+		return
+	}
+
+	client, err := newGatewayClient(w.gatewayAddr)
+	if err != nil {
+		log.Printf("[worker-%s] drain failed: %v", w.id, err)
+		return
+	}
+	defer client.close()
+
+	deadline := time.Now().Add(w.drainTimeout)
+	for time.Now().Before(deadline) {
+		if w.sessions.count() == 0 {
+			log.Printf("[worker-%s] drained, shutting down", w.id)
+			return
+		}
+
+		resp, err := client.drain(w.id, reason)
+		if err != nil {
+			log.Printf("[worker-%s] drain call failed: %v", w.id, err)
+		} else if !resp.Accepted {
+			log.Printf("[worker-%s] gateway could not place all %d sessions", w.id, resp.SessionCount)
+		}
+
+		time.Sleep(drainPollInterval)
+	}
+
+	log.Printf("[worker-%s] drain timeout, %d sessions still active", w.id, w.sessions.count())
 }
 
 func (w *Worker) startGRPC() error {

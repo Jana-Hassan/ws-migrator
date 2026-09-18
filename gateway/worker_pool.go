@@ -8,6 +8,7 @@ type WorkerInfo struct {
 	ID       string
 	WSAddr   string
 	GRPCAddr string
+	Draining bool
 }
 
 type Pool struct {
@@ -32,6 +33,14 @@ func (p *Pool) Get(id string) (*WorkerInfo, bool) {
 	defer p.mu.RUnlock()
 	w, ok := p.workers[id]
 	return w, ok
+}
+
+func (p *Pool) SetDraining(id string, draining bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if w, ok := p.workers[id]; ok {
+		w.Draining = draining
+	}
 }
 
 func (p *Pool) All() []*WorkerInfo {

@@ -14,6 +14,7 @@ import (
 func main() {
 
 	listenAddr := getEnv("LISTEN_ADDR", ":8080")
+	grpcAddr := getEnv("GRPC_ADDR", ":9090")
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
 	workersRaw := getEnv("WORKERS", "worker-1|ws://localhost:8081/ws|localhost:9091")
 
@@ -35,6 +36,13 @@ func main() {
 	}
 
 	server := gateway.NewServer(pool, s)
+
+	go func() {
+		if err := server.StartGRPC(grpcAddr); err != nil {
+			log.Fatalf("gateway gRPC failed: %v", err)
+		}
+	}()
+
 	if err := server.Start(listenAddr); err != nil {
 		log.Fatalf("gateway failed: %v", err)
 	}
