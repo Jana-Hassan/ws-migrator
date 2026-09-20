@@ -115,17 +115,3 @@ func TestHeartbeatsDoNotUndoDrain(t *testing.T) {
 		}
 	}
 }
-
-func TestDeadWorkerDropsItsSessions(t *testing.T) {
-	c := newCluster(t, 2)
-
-	client := c.connect()
-	first := client.sendExpectingNext("hello")
-
-	c.worker(first.worker).kill()
-
-	client.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
-	if _, _, err := client.conn.ReadMessage(); err == nil {
-		t.Fatal("client stayed connected after its worker died; update this test if Step 8 changed that")
-	}
-}

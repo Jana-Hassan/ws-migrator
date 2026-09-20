@@ -23,11 +23,12 @@ import (
 )
 
 const (
-	testDrainTimeout   = 1 * time.Second
-	waitTimeout        = 5 * time.Second
-	ioTimeout          = 5 * time.Second
-	testHealthInterval = 50 * time.Millisecond
-	slowHealthInterval = 30 * time.Second
+	testDrainTimeout     = 1 * time.Second
+	waitTimeout          = 5 * time.Second
+	ioTimeout            = 5 * time.Second
+	testHealthInterval   = 50 * time.Millisecond
+	slowHealthInterval   = 30 * time.Second
+	testSnapshotInterval = 50 * time.Millisecond
 )
 
 var testHealthConfig = gateway.HealthConfig{
@@ -95,6 +96,17 @@ type cluster struct {
 	pool        *gateway.Pool
 	workers     []*testWorker
 	gatewayAddr string
+	redis       *miniredis.Miniredis
+}
+
+func (c *cluster) snapshot(sessionID string) (string, bool) {
+	c.t.Helper()
+
+	state, err := c.redis.Get("snapshot:" + sessionID)
+	if err != nil {
+		return "", false
+	}
+	return state, true
 }
 
 type reply struct {
@@ -125,7 +137,7 @@ func newClusterWith(t *testing.T, workerCount int, onCreate func(string) worker.
 	httpSrv := httptest.NewServer(gw.Handler())
 	t.Cleanup(httpSrv.Close)
 
-	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String()}
+	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis}
 
 	for i := 1; i <= workerCount; i++ {
 		c.addWorker(fmt.Sprintf("worker-%d", i), onCreate, testHealthInterval)
@@ -162,10 +174,12 @@ func (c *cluster) addWorker(id string, onCreate func(string) worker.State, healt
 	c.t.Cleanup(func() { grpcLis.Close() })
 
 	w := worker.NewWorker(worker.Config{
-		ID:             id,
-		GatewayAddr:    c.gatewayAddr,
-		DrainTimeout:   testDrainTimeout,
-		HealthInterval: healthInterval,
+		ID:               id,
+		GatewayAddr:      c.gatewayAddr,
+		DrainTimeout:     testDrainTimeout,
+		HealthInterval:   healthInterval,
+		SnapshotInterval: testSnapshotInterval,
+		RedisAddr:        c.redis.Addr(),
 	})
 
 	w.OnSessionCreate(onCreate)
@@ -183,6 +197,10 @@ func (c *cluster) addWorker(id string, onCreate func(string) worker.State, healt
 	})
 
 	go w.StartGRPCOn(grpcLis)
+
+	snapshotCtx, stopSnapshots := context.WithCancel(context.Background())
+	c.t.Cleanup(stopSnapshots)
+	go w.StartSnapshots(snapshotCtx)
 
 	wsLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
