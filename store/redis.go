@@ -15,34 +15,27 @@ const (
 	snapshotTTL    = 1 * time.Hour
 )
 
-type SessionData struct {
-	ID          string
-	WorkerID    string
-	ConnectedAt time.Time
-	Status      string // "active", "migrating", "migrated"
-}
-
-type Store struct {
+type RedisStore struct {
 	client *redis.Client
 }
 
-func New(addr string) *Store {
-	return &Store{
+func NewRedis(addr string) *RedisStore {
+	return &RedisStore{
 		client: redis.NewClient(&redis.Options{
 			Addr: addr,
 		}),
 	}
 }
 
-func (s *Store) key(sessionID string) string { //builds  redis key for a session
+func (s *RedisStore) key(sessionID string) string { //builds  redis key for a session
 	return fmt.Sprintf("%s%s", sessionPrefix, sessionID)
 }
 
-func (s *Store) snapshotKey(sessionID string) string {
+func (s *RedisStore) snapshotKey(sessionID string) string {
 	return fmt.Sprintf("%s%s", snapshotPrefix, sessionID)
 }
 
-func (s *Store) SaveSnapshot(ctx context.Context, sessionID string, state []byte) error {
+func (s *RedisStore) SaveSnapshot(ctx context.Context, sessionID string, state []byte) error {
 	err := s.client.Set(ctx, s.snapshotKey(sessionID), state, snapshotTTL).Err()
 	if err != nil {
 		return fmt.Errorf("save snapshot %s: %w", sessionID, err)
@@ -50,7 +43,7 @@ func (s *Store) SaveSnapshot(ctx context.Context, sessionID string, state []byte
 	return nil
 }
 
-func (s *Store) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, error) {
+func (s *RedisStore) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, error) {
 	state, err := s.client.Get(ctx, s.snapshotKey(sessionID)).Bytes()
 	if err == redis.Nil {
 		return nil, nil
@@ -61,7 +54,7 @@ func (s *Store) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, err
 	return state, nil
 }
 
-func (s *Store) DeleteSnapshot(ctx context.Context, sessionID string) error {
+func (s *RedisStore) DeleteSnapshot(ctx context.Context, sessionID string) error {
 	err := s.client.Del(ctx, s.snapshotKey(sessionID)).Err()
 	if err != nil {
 		return fmt.Errorf("delete snapshot %s: %w", sessionID, err)
@@ -69,7 +62,7 @@ func (s *Store) DeleteSnapshot(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (s *Store) Save(ctx context.Context, data *SessionData) error {
+func (s *RedisStore) Save(ctx context.Context, data *SessionData) error {
 	key := s.key(data.ID)
 
 	err := s.client.HSet(ctx, key,
@@ -91,7 +84,7 @@ func (s *Store) Save(ctx context.Context, data *SessionData) error {
 }
 
 // reads session data from redis by id
-func (s *Store) Load(ctx context.Context, sessionID string) (*SessionData, error) {
+func (s *RedisStore) Load(ctx context.Context, sessionID string) (*SessionData, error) {
 	key := s.key(sessionID)
 
 	fields, err := s.client.HGetAll(ctx, key).Result()
@@ -116,7 +109,7 @@ func (s *Store) Load(ctx context.Context, sessionID string) (*SessionData, error
 	}, nil
 }
 
-func (s *Store) Delete(ctx context.Context, sessionID string) error {
+func (s *RedisStore) Delete(ctx context.Context, sessionID string) error {
 	err := s.client.Del(ctx, s.key(sessionID)).Err()
 	if err != nil {
 		return fmt.Errorf("delete session %s: %w", sessionID, err)
@@ -125,6 +118,6 @@ func (s *Store) Delete(ctx context.Context, sessionID string) error {
 }
 
 // checks if redis is reachable
-func (s *Store) Ping(ctx context.Context) error {
+func (s *RedisStore) Ping(ctx context.Context) error {
 	return s.client.Ping(ctx).Err()
 }

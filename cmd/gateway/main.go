@@ -18,7 +18,7 @@ func main() {
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
 	workersRaw := getEnv("WORKERS", "worker-1|ws://localhost:8081/ws|localhost:9091")
 
-	s := store.New(redisAddr)
+	s := store.NewRedis(redisAddr)
 
 	if err := s.Ping(context.Background()); err != nil {
 		log.Fatalf("cannot reach Redis at %s: %v", redisAddr, err)

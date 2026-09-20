@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 
+	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/Jana-Hassan/ws-migrator/worker"
 )
 
@@ -13,7 +14,7 @@ func main() {
 		WSAddr:      getEnv("LISTEN_ADDR", ":8081"),
 		GRPCAddr:    getEnv("GRPC_ADDR", ":9091"),
 		GatewayAddr: getEnv("GATEWAY_ADDR", "localhost:9090"),
-		RedisAddr:   getEnv("REDIS_ADDR", "localhost:6379"),
+		Store:       store.NewRedis(getEnv("REDIS_ADDR", "localhost:6379")),
 	}
 
 	w := worker.NewWorker(cfg)

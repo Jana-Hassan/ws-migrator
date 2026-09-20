@@ -20,7 +20,7 @@ const (
 type Server struct {
 	pool       *Pool
 	registry   *Registry
-	store      *store.Store
+	store      store.Store
 	grpcClient *GRPCClient
 }
 
@@ -32,7 +32,7 @@ var upgrader = websocket.Upgrader{ //converts http req to ws connection
 	},
 }
 
-func NewServer(pool *Pool, s *store.Store) *Server {
+func NewServer(pool *Pool, s store.Store) *Server {
 	return &Server{
 		pool:       pool,
 		registry:   NewRegistry(),

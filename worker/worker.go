@@ -31,7 +31,7 @@ type Worker struct {
 	drainTimeout     time.Duration
 	healthInterval   time.Duration
 	snapshotInterval time.Duration
-	store            *store.Store
+	store            store.Store
 	sessions         *sessionRegistry
 	onMessage        func(sessionID string, state State, msg []byte) []byte
 	onCreate         func(sessionID string) State
@@ -45,7 +45,7 @@ type Config struct {
 	DrainTimeout     time.Duration
 	HealthInterval   time.Duration
 	SnapshotInterval time.Duration
-	RedisAddr        string
+	Store            store.Store
 }
 
 var upgrader = websocket.Upgrader{
@@ -67,11 +67,6 @@ func NewWorker(cfg Config) *Worker {
 		cfg.SnapshotInterval = defaultSnapshotInterval
 	}
 
-	var snapshots *store.Store
-	if cfg.RedisAddr != "" {
-		snapshots = store.New(cfg.RedisAddr)
-	}
-
 	return &Worker{
 		id:               cfg.ID,
 		wsAddr:           cfg.WSAddr,
@@ -80,7 +75,7 @@ func NewWorker(cfg Config) *Worker {
 		drainTimeout:     cfg.DrainTimeout,
 		healthInterval:   cfg.HealthInterval,
 		snapshotInterval: cfg.SnapshotInterval,
-		store:            snapshots,
+		store:            cfg.Store,
 		sessions:         newSessionRegistry(),
 	}
 }
