@@ -1,28 +1,41 @@
 package integration
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gorilla/websocket"
+	"google.golang.org/grpc"
 
 	"github.com/Jana-Hassan/ws-migrator/gateway"
+	migratorpb "github.com/Jana-Hassan/ws-migrator/proto"
 	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/Jana-Hassan/ws-migrator/worker"
 )
 
 const (
-	testDrainTimeout = 1 * time.Second
-	waitTimeout      = 5 * time.Second
-	ioTimeout        = 5 * time.Second
+	testDrainTimeout   = 1 * time.Second
+	waitTimeout        = 5 * time.Second
+	ioTimeout          = 5 * time.Second
+	testHealthInterval = 50 * time.Millisecond
+	slowHealthInterval = 30 * time.Second
 )
+
+var testHealthConfig = gateway.HealthConfig{
+	Timeout:        400 * time.Millisecond,
+	RecoverUpdates: 2,
+	MinBackoff:     20 * time.Millisecond,
+	MaxBackoff:     100 * time.Millisecond,
+}
 
 type counter struct {
 	Count int
@@ -52,15 +65,36 @@ func (f *failingState) Serialize() ([]byte, error) {
 type testWorker struct {
 	id     string
 	worker *worker.Worker
-	ws     *httptest.Server
+	wsURL  string
+	lis    net.Listener
+	mu     sync.Mutex
+	conns  []net.Conn
+}
+
+func (tw *testWorker) track(conn net.Conn) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.conns = append(tw.conns, conn)
+}
+
+func (tw *testWorker) kill() {
+	tw.lis.Close()
+
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	for _, conn := range tw.conns {
+		conn.Close()
+	}
+	tw.conns = nil
 }
 
 type cluster struct {
-	t       *testing.T
-	gateway *gateway.Server
-	http    *httptest.Server
-	pool    *gateway.Pool
-	workers []*testWorker
+	t           *testing.T
+	gateway     *gateway.Server
+	http        *httptest.Server
+	pool        *gateway.Pool
+	workers     []*testWorker
+	gatewayAddr string
 }
 
 type reply struct {
@@ -91,16 +125,34 @@ func newClusterWith(t *testing.T, workerCount int, onCreate func(string) worker.
 	httpSrv := httptest.NewServer(gw.Handler())
 	t.Cleanup(httpSrv.Close)
 
-	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool}
+	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String()}
 
 	for i := 1; i <= workerCount; i++ {
-		c.addWorker(fmt.Sprintf("worker-%d", i), gwLis.Addr().String(), onCreate)
+		c.addWorker(fmt.Sprintf("worker-%d", i), onCreate, testHealthInterval)
 	}
 
 	return c
 }
 
-func (c *cluster) addWorker(id, gatewayAddr string, onCreate func(string) worker.State) *testWorker {
+func (c *cluster) startHealth() {
+	c.t.Helper()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.t.Cleanup(cancel)
+	c.gateway.StartHealthMonitor(ctx, testHealthConfig)
+}
+
+func (c *cluster) healthy(id string) bool {
+	c.t.Helper()
+
+	w, ok := c.pool.Get(id)
+	if !ok {
+		c.t.Fatalf("worker %s not in pool", id)
+	}
+	return w.Healthy
+}
+
+func (c *cluster) addWorker(id string, onCreate func(string) worker.State, healthInterval time.Duration) *testWorker {
 	c.t.Helper()
 
 	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -110,9 +162,10 @@ func (c *cluster) addWorker(id, gatewayAddr string, onCreate func(string) worker
 	c.t.Cleanup(func() { grpcLis.Close() })
 
 	w := worker.NewWorker(worker.Config{
-		ID:           id,
-		GatewayAddr:  gatewayAddr,
-		DrainTimeout: testDrainTimeout,
+		ID:             id,
+		GatewayAddr:    c.gatewayAddr,
+		DrainTimeout:   testDrainTimeout,
+		HealthInterval: healthInterval,
 	})
 
 	w.OnSessionCreate(onCreate)
@@ -131,18 +184,94 @@ func (c *cluster) addWorker(id, gatewayAddr string, onCreate func(string) worker
 
 	go w.StartGRPCOn(grpcLis)
 
-	ws := httptest.NewServer(w.Handler())
-	c.t.Cleanup(ws.Close)
+	wsLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		c.t.Fatalf("worker ws listen: %v", err)
+	}
+
+	tw := &testWorker{
+		id:     id,
+		worker: w,
+		wsURL:  "ws://" + wsLis.Addr().String() + "/ws",
+		lis:    wsLis,
+	}
+
+	srv := &http.Server{
+		Handler: w.Handler(),
+		ConnState: func(conn net.Conn, state http.ConnState) {
+			if state == http.StateHijacked {
+				tw.track(conn)
+			}
+		},
+	}
+
+	go srv.Serve(wsLis)
+	c.t.Cleanup(tw.kill)
 
 	c.pool.Add(&gateway.WorkerInfo{
 		ID:       id,
-		WSAddr:   "ws" + strings.TrimPrefix(ws.URL, "http") + "/ws",
+		WSAddr:   tw.wsURL,
 		GRPCAddr: grpcLis.Addr().String(),
 	})
 
-	tw := &testWorker{id: id, worker: w, ws: ws}
 	c.workers = append(c.workers, tw)
 	return tw
+}
+
+type fakeWorker struct {
+	migratorpb.UnimplementedWorkerServiceServer
+	id    string
+	beats chan struct{}
+	srv   *grpc.Server
+}
+
+func (f *fakeWorker) HealthStream(req *migratorpb.HealthStreamRequest, stream grpc.ServerStreamingServer[migratorpb.HealthUpdate]) error {
+	for {
+		select {
+		case <-stream.Context().Done():
+			return nil
+		case <-f.beats:
+			err := stream.Send(&migratorpb.HealthUpdate{
+				WorkerId: f.id,
+				Status:   migratorpb.WorkerStatus_WORKER_STATUS_SERVING,
+				UnixMs:   time.Now().UnixMilli(),
+			})
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (f *fakeWorker) beat() {
+	f.beats <- struct{}{}
+}
+
+func (f *fakeWorker) stop() {
+	f.srv.Stop()
+}
+
+func (c *cluster) addFakeWorker(id string) *fakeWorker {
+	c.t.Helper()
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		c.t.Fatalf("fake worker listen: %v", err)
+	}
+
+	f := &fakeWorker{id: id, beats: make(chan struct{}), srv: grpc.NewServer()}
+	migratorpb.RegisterWorkerServiceServer(f.srv, f)
+
+	go f.srv.Serve(lis)
+	c.t.Cleanup(f.srv.Stop)
+
+	c.pool.Add(&gateway.WorkerInfo{
+		ID:       id,
+		WSAddr:   "ws://127.0.0.1:1/ws",
+		GRPCAddr: lis.Addr().String(),
+	})
+
+	return f
 }
 
 func (c *cluster) otherWorker(id string) string {
