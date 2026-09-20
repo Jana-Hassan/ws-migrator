@@ -3,6 +3,7 @@ package worker
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -13,11 +14,20 @@ type State interface {
 }
 
 type session struct {
-	mu    sync.Mutex
-	id    string
-	conn  *websocket.Conn
-	state State
-	dirty bool
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	id      string
+	conn    *websocket.Conn
+	state   State
+	dirty   bool
+}
+
+func (s *session) write(messageType int, data []byte) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.conn.SetWriteDeadline(time.Now().Add(writeWait))
+	return s.conn.WriteMessage(messageType, data)
 }
 
 type sessionRegistry struct {

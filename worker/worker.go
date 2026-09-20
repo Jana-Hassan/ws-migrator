@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -21,6 +22,7 @@ const (
 	drainPollInterval       = 500 * time.Millisecond
 	defaultHealthInterval   = 5 * time.Second
 	defaultSnapshotInterval = 5 * time.Second
+	writeWait               = 10 * time.Second
 )
 
 type Worker struct {
@@ -35,6 +37,7 @@ type Worker struct {
 	sessions         *sessionRegistry
 	onMessage        func(sessionID string, state State, msg []byte) []byte
 	onCreate         func(sessionID string) State
+	onEnd            func(sessionID string, state State)
 }
 
 type Config struct {
@@ -87,6 +90,19 @@ func (w *Worker) OnMessage(fn func(sessionID string, state State, msg []byte) []
 // optionally provides this
 func (w *Worker) OnSessionCreate(fn func(sessionID string) State) {
 	w.onCreate = fn
+}
+
+func (w *Worker) OnSessionEnd(fn func(sessionID string, state State)) {
+	w.onEnd = fn
+}
+
+func (w *Worker) Send(sessionID string, msg []byte) error {
+	s, ok := w.sessions.get(sessionID)
+	if !ok {
+		return fmt.Errorf("session %s not on worker %s", sessionID, w.id)
+	}
+
+	return s.write(websocket.TextMessage, msg)
 }
 
 func (w *Worker) Start() error {
@@ -215,7 +231,12 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 	}
 
 	defer conn.Close()
-	defer w.sessions.remove(sessionID)
+	defer func() {
+		w.sessions.remove(sessionID)
+		if w.onEnd != nil {
+			w.onEnd(sessionID, s.state)
+		}
+	}()
 
 	log.Printf("[worker-%s] session %s connected", w.id, sessionID)
 
@@ -242,7 +263,7 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		s.dirty = true
 		s.mu.Unlock()
 
-		if err := conn.WriteMessage(messageType, response); err != nil {
+		if err := s.write(messageType, response); err != nil {
 			log.Printf("[worker-%s] write error: %v", w.id, err)
 			return
 		}

@@ -98,6 +98,33 @@ type cluster struct {
 	gatewayAddr string
 	redis       *miniredis.Miniredis
 	store       store.Store
+
+	endsMu sync.Mutex
+	ends   []sessionEnd
+}
+
+type sessionEnd struct {
+	workerID  string
+	sessionID string
+}
+
+func (c *cluster) recordEnd(workerID, sessionID string) {
+	c.endsMu.Lock()
+	defer c.endsMu.Unlock()
+	c.ends = append(c.ends, sessionEnd{workerID: workerID, sessionID: sessionID})
+}
+
+func (c *cluster) endsFor(sessionID string) []string {
+	c.endsMu.Lock()
+	defer c.endsMu.Unlock()
+
+	var workers []string
+	for _, e := range c.ends {
+		if e.sessionID == sessionID {
+			workers = append(workers, e.workerID)
+		}
+	}
+	return workers
 }
 
 func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
@@ -223,6 +250,9 @@ func (c *cluster) addWorkerOn(id string, onCreate func(string) worker.State, hea
 	})
 
 	w.OnSessionCreate(onCreate)
+	w.OnSessionEnd(func(sessionID string, state worker.State) {
+		c.recordEnd(id, sessionID)
+	})
 	w.OnMessage(func(sessionID string, state worker.State, msg []byte) []byte {
 		n := 0
 		switch s := state.(type) {
