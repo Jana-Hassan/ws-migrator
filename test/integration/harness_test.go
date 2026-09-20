@@ -97,6 +97,7 @@ type cluster struct {
 	workers     []*testWorker
 	gatewayAddr string
 	redis       *miniredis.Miniredis
+	store       store.Store
 }
 
 func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
@@ -104,7 +105,11 @@ func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
 
 	var landed string
 	waitFor(c.t, "session "+sessionID+" to move off "+deadWorker, func() bool {
-		landed = c.redis.HGet("session:"+sessionID, "worker_id")
+		data, err := c.store.Load(context.Background(), sessionID)
+		if err != nil || data == nil {
+			return false
+		}
+		landed = data.WorkerID
 		return landed != "" && landed != deadWorker
 	})
 	return landed
@@ -113,11 +118,19 @@ func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
 func (c *cluster) snapshot(sessionID string) (string, bool) {
 	c.t.Helper()
 
-	state, err := c.redis.Get("snapshot:" + sessionID)
-	if err != nil {
+	state, err := c.store.LoadSnapshot(context.Background(), sessionID)
+	if err != nil || state == nil {
 		return "", false
 	}
-	return state, true
+	return string(state), true
+}
+
+func (c *cluster) dropSnapshot(sessionID string) {
+	c.t.Helper()
+
+	if err := c.store.DeleteSnapshot(context.Background(), sessionID); err != nil {
+		c.t.Fatalf("drop snapshot: %v", err)
+	}
 }
 
 type reply struct {
@@ -135,8 +148,14 @@ func newClusterWith(t *testing.T, workerCount int, onCreate func(string) worker.
 	t.Helper()
 
 	redis := miniredis.RunT(t)
+	return newClusterOn(t, workerCount, onCreate, store.NewRedis(redis.Addr()), redis)
+}
+
+func newClusterOn(t *testing.T, workerCount int, onCreate func(string) worker.State, backing store.Store, redis *miniredis.Miniredis) *cluster {
+	t.Helper()
+
 	pool := gateway.NewPool()
-	gw := gateway.NewServer(pool, store.New(redis.Addr()))
+	gw := gateway.NewServer(pool, backing)
 
 	gwLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -148,7 +167,7 @@ func newClusterWith(t *testing.T, workerCount int, onCreate func(string) worker.
 	httpSrv := httptest.NewServer(gw.Handler())
 	t.Cleanup(httpSrv.Close)
 
-	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis}
+	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis, store: backing}
 
 	for i := 1; i <= workerCount; i++ {
 		c.addWorker(fmt.Sprintf("worker-%d", i), onCreate, testHealthInterval)
@@ -177,6 +196,16 @@ func (c *cluster) healthy(id string) bool {
 
 func (c *cluster) addWorker(id string, onCreate func(string) worker.State, healthInterval time.Duration) *testWorker {
 	c.t.Helper()
+	return c.addWorkerOn(id, onCreate, healthInterval, c.store)
+}
+
+func (c *cluster) addWorkerWithoutStore(id string) *testWorker {
+	c.t.Helper()
+	return c.addWorkerOn(id, func(string) worker.State { return &counter{} }, testHealthInterval, nil)
+}
+
+func (c *cluster) addWorkerOn(id string, onCreate func(string) worker.State, healthInterval time.Duration, backing store.Store) *testWorker {
+	c.t.Helper()
 
 	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -190,7 +219,7 @@ func (c *cluster) addWorker(id string, onCreate func(string) worker.State, healt
 		DrainTimeout:     testDrainTimeout,
 		HealthInterval:   healthInterval,
 		SnapshotInterval: testSnapshotInterval,
-		RedisAddr:        c.redis.Addr(),
+		Store:            backing,
 	})
 
 	w.OnSessionCreate(onCreate)

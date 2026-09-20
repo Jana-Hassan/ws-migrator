@@ -36,7 +36,7 @@ func TestIdleSessionIsNotSnapshotted(t *testing.T) {
 	client.sendExpectingNext("hello")
 	c.waitForSnapshot(client.session, "1")
 
-	c.redis.Del("snapshot:" + client.session)
+	c.dropSnapshot(client.session)
 	time.Sleep(4 * testSnapshotInterval)
 
 	if state, ok := c.snapshot(client.session); ok {
@@ -127,7 +127,7 @@ func TestMigrationWritesSnapshot(t *testing.T) {
 	first := client.sendExpectingNext("hello")
 	client.sendExpectingNext("hello")
 
-	c.redis.Del("snapshot:" + first.sessionID)
+	c.dropSnapshot(first.sessionID)
 
 	target := c.otherWorker(first.worker)
 	c.migrateOK(first.sessionID, target)
