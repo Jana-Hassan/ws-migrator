@@ -9,8 +9,10 @@ import (
 )
 
 const (
-	sessionPrefix = "session:"
-	sessionTTL    = 24 * time.Hour
+	sessionPrefix  = "session:"
+	sessionTTL     = 24 * time.Hour
+	snapshotPrefix = "snapshot:"
+	snapshotTTL    = 1 * time.Hour
 )
 
 type SessionData struct {
@@ -34,6 +36,37 @@ func New(addr string) *Store {
 
 func (s *Store) key(sessionID string) string { //builds  redis key for a session
 	return fmt.Sprintf("%s%s", sessionPrefix, sessionID)
+}
+
+func (s *Store) snapshotKey(sessionID string) string {
+	return fmt.Sprintf("%s%s", snapshotPrefix, sessionID)
+}
+
+func (s *Store) SaveSnapshot(ctx context.Context, sessionID string, state []byte) error {
+	err := s.client.Set(ctx, s.snapshotKey(sessionID), state, snapshotTTL).Err()
+	if err != nil {
+		return fmt.Errorf("save snapshot %s: %w", sessionID, err)
+	}
+	return nil
+}
+
+func (s *Store) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, error) {
+	state, err := s.client.Get(ctx, s.snapshotKey(sessionID)).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load snapshot %s: %w", sessionID, err)
+	}
+	return state, nil
+}
+
+func (s *Store) DeleteSnapshot(ctx context.Context, sessionID string) error {
+	err := s.client.Del(ctx, s.snapshotKey(sessionID)).Err()
+	if err != nil {
+		return fmt.Errorf("delete snapshot %s: %w", sessionID, err)
+	}
+	return nil
 }
 
 func (s *Store) Save(ctx context.Context, data *SessionData) error {
