@@ -13,16 +13,18 @@ import (
 
 type grpcServer struct {
 	migratorpb.UnimplementedWorkerServiceServer
-	sessions *sessionRegistry
-	workerID string
-	onCreate func(sessionID string) State
+	sessions       *sessionRegistry
+	workerID       string
+	onCreate       func(sessionID string) State
+	healthInterval time.Duration
 }
 
-func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(sessionID string) State) *grpcServer {
+func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(sessionID string) State, healthInterval time.Duration) *grpcServer {
 	return &grpcServer{
-		workerID: workerID,
-		sessions: sessions,
-		onCreate: onCreate,
+		workerID:       workerID,
+		sessions:       sessions,
+		onCreate:       onCreate,
+		healthInterval: healthInterval,
 	}
 }
 
@@ -77,7 +79,7 @@ func (g *grpcServer) Checkpoint(ctx context.Context, req *migratorpb.CheckpointR
 }
 
 func (g *grpcServer) HealthStream(req *migratorpb.HealthStreamRequest, stream grpc.ServerStreamingServer[migratorpb.HealthUpdate]) error {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(g.healthInterval)
 	defer ticker.Stop()
 
 	for {

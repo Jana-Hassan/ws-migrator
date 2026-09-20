@@ -86,6 +86,15 @@ func (c *GRPCClient) Restore(ctx context.Context, workerID, sessionID string, st
 	})
 }
 
+func (c *GRPCClient) HealthStream(ctx context.Context, workerID string) (grpc.ServerStreamingClient[migratorpb.HealthUpdate], error) {
+	client, err := c.connect(workerID)
+	if err != nil {
+		return nil, err
+	}
+
+	return client.HealthStream(ctx, &migratorpb.HealthStreamRequest{})
+}
+
 func (c *GRPCClient) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

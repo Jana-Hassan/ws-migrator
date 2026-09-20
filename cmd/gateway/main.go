@@ -43,6 +43,8 @@ func main() {
 		}
 	}()
 
+	server.StartHealthMonitor(context.Background(), gateway.HealthConfig{})
+
 	if err := server.Start(listenAddr); err != nil {
 		log.Fatalf("gateway failed: %v", err)
 	}

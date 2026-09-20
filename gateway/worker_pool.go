@@ -9,6 +9,7 @@ type WorkerInfo struct {
 	WSAddr   string
 	GRPCAddr string
 	Draining bool
+	Healthy  bool
 }
 
 type Pool struct {
@@ -25,14 +26,21 @@ func NewPool() *Pool {
 func (p *Pool) Add(w *WorkerInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.workers[w.ID] = w
+
+	added := *w
+	added.Healthy = true
+	p.workers[added.ID] = &added
 }
 
-func (p *Pool) Get(id string) (*WorkerInfo, bool) {
+func (p *Pool) Get(id string) (WorkerInfo, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+
 	w, ok := p.workers[id]
-	return w, ok
+	if !ok {
+		return WorkerInfo{}, false
+	}
+	return *w, true
 }
 
 func (p *Pool) SetDraining(id string, draining bool) {
@@ -43,13 +51,21 @@ func (p *Pool) SetDraining(id string, draining bool) {
 	}
 }
 
-func (p *Pool) All() []*WorkerInfo {
+func (p *Pool) SetHealthy(id string, healthy bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if w, ok := p.workers[id]; ok {
+		w.Healthy = healthy
+	}
+}
+
+func (p *Pool) All() []WorkerInfo {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	result := make([]*WorkerInfo, 0, len(p.workers))
+	result := make([]WorkerInfo, 0, len(p.workers))
 	for _, w := range p.workers {
-		result = append(result, w)
+		result = append(result, *w)
 	}
 	return result
 }

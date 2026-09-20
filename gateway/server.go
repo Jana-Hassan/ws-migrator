@@ -204,22 +204,24 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	log.Printf("connection closed for %s", r.RemoteAddr)
 }
 
-func (s *Server) pickWorker(exclude string) (*WorkerInfo, bool) {
-	var best *WorkerInfo
+func (s *Server) pickWorker(exclude string) (WorkerInfo, bool) {
+	var best WorkerInfo
+	found := false
 	minSessions := -1
 
 	for _, w := range s.pool.All() {
-		if w.Draining || w.ID == exclude {
+		if w.Draining || !w.Healthy || w.ID == exclude {
 			continue
 		}
 		count := len(s.registry.AllOnWorker(w.ID))
 		if minSessions == -1 || count < minSessions {
 			minSessions = count
 			best = w
+			found = true
 		}
 	}
 
-	return best, best != nil
+	return best, found
 }
 
 type clientMessage struct {

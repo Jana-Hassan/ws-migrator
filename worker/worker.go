@@ -15,27 +15,30 @@ import (
 )
 
 const (
-	defaultDrainTimeout = 30 * time.Second
-	drainPollInterval   = 500 * time.Millisecond
+	defaultDrainTimeout   = 30 * time.Second
+	drainPollInterval     = 500 * time.Millisecond
+	defaultHealthInterval = 5 * time.Second
 )
 
 type Worker struct {
-	id           string
-	wsAddr       string
-	grpcAddr     string
-	gatewayAddr  string
-	drainTimeout time.Duration
-	sessions     *sessionRegistry
-	onMessage    func(sessionID string, state State, msg []byte) []byte
-	onCreate     func(sessionID string) State
+	id             string
+	wsAddr         string
+	grpcAddr       string
+	gatewayAddr    string
+	drainTimeout   time.Duration
+	healthInterval time.Duration
+	sessions       *sessionRegistry
+	onMessage      func(sessionID string, state State, msg []byte) []byte
+	onCreate       func(sessionID string) State
 }
 
 type Config struct {
-	ID           string
-	GRPCAddr     string
-	WSAddr       string
-	GatewayAddr  string
-	DrainTimeout time.Duration
+	ID             string
+	GRPCAddr       string
+	WSAddr         string
+	GatewayAddr    string
+	DrainTimeout   time.Duration
+	HealthInterval time.Duration
 }
 
 var upgrader = websocket.Upgrader{
@@ -50,14 +53,18 @@ func NewWorker(cfg Config) *Worker {
 	if cfg.DrainTimeout == 0 {
 		cfg.DrainTimeout = defaultDrainTimeout
 	}
+	if cfg.HealthInterval == 0 {
+		cfg.HealthInterval = defaultHealthInterval
+	}
 
 	return &Worker{
-		id:           cfg.ID,
-		wsAddr:       cfg.WSAddr,
-		grpcAddr:     cfg.GRPCAddr,
-		gatewayAddr:  cfg.GatewayAddr,
-		drainTimeout: cfg.DrainTimeout,
-		sessions:     newSessionRegistry(),
+		id:             cfg.ID,
+		wsAddr:         cfg.WSAddr,
+		grpcAddr:       cfg.GRPCAddr,
+		gatewayAddr:    cfg.GatewayAddr,
+		drainTimeout:   cfg.DrainTimeout,
+		healthInterval: cfg.HealthInterval,
+		sessions:       newSessionRegistry(),
 	}
 }
 
@@ -141,7 +148,7 @@ func (w *Worker) startGRPC() error {
 
 func (w *Worker) StartGRPCOn(lis net.Listener) error {
 	srv := grpc.NewServer()
-	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions, w.onCreate))
+	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions, w.onCreate, w.healthInterval))
 	return srv.Serve(lis)
 }
 
