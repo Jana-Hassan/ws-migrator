@@ -17,6 +17,7 @@ type session struct {
 	id    string
 	conn  *websocket.Conn
 	state State
+	dirty bool
 }
 
 type sessionRegistry struct {
@@ -67,6 +68,17 @@ func (r *sessionRegistry) get(id string) (*session, bool) {
 	defer r.mu.RUnlock()
 	s, ok := r.sessions[id]
 	return s, ok
+}
+
+func (r *sessionRegistry) all() []*session {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	result := make([]*session, 0, len(r.sessions))
+	for _, s := range r.sessions {
+		result = append(result, s)
+	}
+	return result
 }
 
 func (r *sessionRegistry) count() int {

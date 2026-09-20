@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"log"
 	"net"
 	"net/http"
@@ -10,35 +11,41 @@ import (
 	"time"
 
 	migratorpb "github.com/Jana-Hassan/ws-migrator/proto"
+	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/gorilla/websocket"
 	"google.golang.org/grpc"
 )
 
 const (
-	defaultDrainTimeout   = 30 * time.Second
-	drainPollInterval     = 500 * time.Millisecond
-	defaultHealthInterval = 5 * time.Second
+	defaultDrainTimeout     = 30 * time.Second
+	drainPollInterval       = 500 * time.Millisecond
+	defaultHealthInterval   = 5 * time.Second
+	defaultSnapshotInterval = 5 * time.Second
 )
 
 type Worker struct {
-	id             string
-	wsAddr         string
-	grpcAddr       string
-	gatewayAddr    string
-	drainTimeout   time.Duration
-	healthInterval time.Duration
-	sessions       *sessionRegistry
-	onMessage      func(sessionID string, state State, msg []byte) []byte
-	onCreate       func(sessionID string) State
+	id               string
+	wsAddr           string
+	grpcAddr         string
+	gatewayAddr      string
+	drainTimeout     time.Duration
+	healthInterval   time.Duration
+	snapshotInterval time.Duration
+	store            *store.Store
+	sessions         *sessionRegistry
+	onMessage        func(sessionID string, state State, msg []byte) []byte
+	onCreate         func(sessionID string) State
 }
 
 type Config struct {
-	ID             string
-	GRPCAddr       string
-	WSAddr         string
-	GatewayAddr    string
-	DrainTimeout   time.Duration
-	HealthInterval time.Duration
+	ID               string
+	GRPCAddr         string
+	WSAddr           string
+	GatewayAddr      string
+	DrainTimeout     time.Duration
+	HealthInterval   time.Duration
+	SnapshotInterval time.Duration
+	RedisAddr        string
 }
 
 var upgrader = websocket.Upgrader{
@@ -56,15 +63,25 @@ func NewWorker(cfg Config) *Worker {
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultHealthInterval
 	}
+	if cfg.SnapshotInterval == 0 {
+		cfg.SnapshotInterval = defaultSnapshotInterval
+	}
+
+	var snapshots *store.Store
+	if cfg.RedisAddr != "" {
+		snapshots = store.New(cfg.RedisAddr)
+	}
 
 	return &Worker{
-		id:             cfg.ID,
-		wsAddr:         cfg.WSAddr,
-		grpcAddr:       cfg.GRPCAddr,
-		gatewayAddr:    cfg.GatewayAddr,
-		drainTimeout:   cfg.DrainTimeout,
-		healthInterval: cfg.HealthInterval,
-		sessions:       newSessionRegistry(),
+		id:               cfg.ID,
+		wsAddr:           cfg.WSAddr,
+		grpcAddr:         cfg.GRPCAddr,
+		gatewayAddr:      cfg.GatewayAddr,
+		drainTimeout:     cfg.DrainTimeout,
+		healthInterval:   cfg.HealthInterval,
+		snapshotInterval: cfg.SnapshotInterval,
+		store:            snapshots,
+		sessions:         newSessionRegistry(),
 	}
 }
 
@@ -87,6 +104,10 @@ func (w *Worker) Start() error {
 	go func() {
 		errCh <- w.startWS()
 	}()
+
+	snapshotCtx, stopSnapshots := context.WithCancel(context.Background())
+	defer stopSnapshots()
+	go w.StartSnapshots(snapshotCtx)
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
@@ -223,6 +244,7 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		} else {
 			response = msg
 		}
+		s.dirty = true
 		s.mu.Unlock()
 
 		if err := conn.WriteMessage(messageType, response); err != nil {
