@@ -99,6 +99,17 @@ type cluster struct {
 	redis       *miniredis.Miniredis
 }
 
+func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
+	c.t.Helper()
+
+	var landed string
+	waitFor(c.t, "session "+sessionID+" to move off "+deadWorker, func() bool {
+		landed = c.redis.HGet("session:"+sessionID, "worker_id")
+		return landed != "" && landed != deadWorker
+	})
+	return landed
+}
+
 func (c *cluster) snapshot(sessionID string) (string, bool) {
 	c.t.Helper()
 

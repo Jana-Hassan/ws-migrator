@@ -56,10 +56,11 @@ func TestSessionRecoversFromSnapshotAfterCrash(t *testing.T) {
 	c.waitForSnapshot(first.sessionID, "5")
 
 	c.worker(first.worker).kill()
+	recoveredOn := c.waitForSessionOff(first.sessionID, first.worker)
 
 	r := client.sendExpectingNext("after-crash")
-	if r.worker == first.worker {
-		t.Fatalf("session stayed on the dead worker %s", r.worker)
+	if r.worker != recoveredOn {
+		t.Fatalf("reply came from %s, expected %s", r.worker, recoveredOn)
 	}
 	if r.count != 6 {
 		t.Fatalf("count %d after recovery, wanted 6", r.count)
@@ -76,7 +77,9 @@ func TestRecoveryNeverResetsStateToZero(t *testing.T) {
 	}
 
 	c.waitForSnapshot(first.sessionID, "10")
+
 	c.worker(first.worker).kill()
+	c.waitForSessionOff(first.sessionID, first.worker)
 
 	r := client.send("after-crash")
 	if r.count <= 1 {
