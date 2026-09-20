@@ -149,6 +149,9 @@ func (s *Server) endSession(session *Session) {
 	if err != nil {
 		log.Printf("failed to delete session %s from Redis: %v", session.ID, err)
 	}
+	if err := s.store.DeleteSnapshot(context.Background(), session.ID); err != nil {
+		log.Printf("failed to delete snapshot %s from Redis: %v", session.ID, err)
+	}
 	log.Printf("session %s ended, total active: %d", session.ID, s.registry.Count())
 }
 
@@ -293,7 +296,8 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 			return false
 
 		case <-workerDone:
-			return false
+			workerConn.Close()
+			return s.recoverSession(session)
 
 		case targetWorkerID := <-session.migrateChannel:
 			if !s.migrate(session, targetWorkerID) {
@@ -363,33 +367,74 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 		return false
 	}
 
-	restored, err := s.grpcClient.Restore(ctx, targetWorkerID, session.ID, resp.State)
+	if !s.placeOnWorker(ctx, session, target, resp.State) {
+		return false
+	}
+
+	if err := s.store.SaveSnapshot(ctx, session.ID, resp.State); err != nil {
+		log.Printf("warning: could not snapshot session %s after migration: %v", session.ID, err)
+	}
+
+	log.Printf("migration complete: session %s now on %s", session.ID, targetWorkerID)
+	return true
+}
+
+func (s *Server) placeOnWorker(ctx context.Context, session *Session, target WorkerInfo, state []byte) bool {
+	restored, err := s.grpcClient.Restore(ctx, target.ID, session.ID, state)
 	if err != nil {
-		log.Printf("migration failed: restore error: %v", err)
+		log.Printf("placement failed: restore error: %v", err)
 		return false
 	}
 	if !restored.Ok {
-		log.Printf("migration failed: restore not ok: %s", restored.Error)
+		log.Printf("placement failed: restore not ok: %s", restored.Error)
 		return false
 	}
 
-	newWorkerURL := target.WSAddr + "?session_id=" + session.ID
-	newWorkerConn, _, err := websocket.DefaultDialer.Dial(newWorkerURL, nil)
+	workerURL := target.WSAddr + "?session_id=" + session.ID
+	workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 	if err != nil {
-		log.Printf("migration failed: could not dial new worker: %v", err)
+		log.Printf("placement failed: could not dial %s: %v", target.ID, err)
 		return false
 	}
 
-	newWorkerConn.SetReadLimit(512 * 1024)
+	workerConn.SetReadLimit(512 * 1024)
 
 	session.mu.Lock()
-	session.WorkerConn = newWorkerConn
-	session.WorkerID = targetWorkerID
+	session.WorkerConn = workerConn
+	session.WorkerID = target.ID
 	session.mu.Unlock()
 
-	s.registry.UpdateWorker(session.ID, targetWorkerID)
+	s.registry.UpdateWorker(session.ID, target.ID)
+	return true
+}
 
-	log.Printf("migration complete: session %s now on %s", session.ID, targetWorkerID)
+func (s *Server) recoverSession(session *Session) bool {
+	ctx := context.Background()
+
+	session.mu.Lock()
+	deadWorker := session.WorkerID
+	session.mu.Unlock()
+
+	target, ok := s.pickWorker(deadWorker)
+	if !ok {
+		log.Printf("recovery failed: no healthy worker for session %s", session.ID)
+		return false
+	}
+
+	state, err := s.store.LoadSnapshot(ctx, session.ID)
+	if err != nil {
+		log.Printf("recovery failed: could not load snapshot for %s: %v", session.ID, err)
+		return false
+	}
+
+	log.Printf("recovering session %s from %s onto %s (%d state bytes)", session.ID, deadWorker, target.ID, len(state))
+
+	if !s.placeOnWorker(ctx, session, target, state) {
+		return false
+	}
+
+	s.saveSession(ctx, session, "active")
+	log.Printf("recovery complete: session %s now on %s", session.ID, target.ID)
 	return true
 }
 
