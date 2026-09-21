@@ -234,7 +234,7 @@ type clientMessage struct {
 	data        []byte
 }
 
-func (s *Server) readClient(conn *websocket.Conn, out chan<- clientMessage) {
+func (s *Server) readClient(conn *websocket.Conn, out chan<- clientMessage, done <-chan struct{}) {
 	defer close(out)
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
@@ -247,13 +247,21 @@ func (s *Server) readClient(conn *websocket.Conn, out chan<- clientMessage) {
 			return
 		}
 		conn.SetReadDeadline(time.Now().Add(pongWait))
-		out <- clientMessage{messageType, data}
+
+		select {
+		case out <- clientMessage{messageType, data}:
+		case <-done:
+			return
+		}
 	}
 }
 
 func (s *Server) runSession(session *Session) {
 	clientMessages := make(chan clientMessage)
-	go s.readClient(session.ClientConn, clientMessages)
+	done := make(chan struct{})
+	defer close(done)
+
+	go s.readClient(session.ClientConn, clientMessages, done)
 
 	for {
 		session.mu.Lock()
