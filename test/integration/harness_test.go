@@ -29,13 +29,17 @@ const (
 	testHealthInterval   = 50 * time.Millisecond
 	slowHealthInterval   = 30 * time.Second
 	testSnapshotInterval = 50 * time.Millisecond
+	testRegisterInterval = 50 * time.Millisecond
+	testPendingTTL       = 150 * time.Millisecond
 )
 
 var testHealthConfig = gateway.HealthConfig{
-	Timeout:        400 * time.Millisecond,
-	RecoverUpdates: 2,
-	MinBackoff:     20 * time.Millisecond,
-	MaxBackoff:     100 * time.Millisecond,
+	Timeout:             400 * time.Millisecond,
+	RecoverUpdates:      2,
+	MinBackoff:          20 * time.Millisecond,
+	MaxBackoff:          100 * time.Millisecond,
+	ReconcileInterval:   20 * time.Millisecond,
+	EvictAfterUnhealthy: 600 * time.Millisecond,
 }
 
 type counter struct {
@@ -98,6 +102,8 @@ type cluster struct {
 	gatewayAddr string
 	redis       *miniredis.Miniredis
 	store       store.Store
+
+	token string
 
 	endsMu sync.Mutex
 	ends   []sessionEnd
@@ -203,6 +209,21 @@ func newClusterOn(t *testing.T, workerCount int, onCreate func(string) worker.St
 	return c
 }
 
+func newEmptyCluster(t *testing.T) *cluster {
+	t.Helper()
+
+	redis := miniredis.RunT(t)
+	onCreate := func(sessionID string) worker.State { return &counter{} }
+	return newClusterOn(t, 0, onCreate, store.NewRedis(redis.Addr()), redis)
+}
+
+func (c *cluster) healthyInPool(id string) bool {
+	c.t.Helper()
+
+	w, ok := c.pool.Get(id)
+	return ok && w.Healthy
+}
+
 func (c *cluster) startHealth() {
 	c.t.Helper()
 
@@ -233,6 +254,16 @@ func (c *cluster) addWorkerWithoutStore(id string) *testWorker {
 
 func (c *cluster) addWorkerOn(id string, onCreate func(string) worker.State, healthInterval time.Duration, backing store.Store) *testWorker {
 	c.t.Helper()
+	return c.buildWorker(id, onCreate, healthInterval, backing, true)
+}
+
+func (c *cluster) addSelfRegisteringWorker(id string) *testWorker {
+	c.t.Helper()
+	return c.buildWorker(id, func(string) worker.State { return &counter{} }, testHealthInterval, c.store, false)
+}
+
+func (c *cluster) buildWorker(id string, onCreate func(string) worker.State, healthInterval time.Duration, backing store.Store, seed bool) *testWorker {
+	c.t.Helper()
 
 	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -240,12 +271,23 @@ func (c *cluster) addWorkerOn(id string, onCreate func(string) worker.State, hea
 	}
 	c.t.Cleanup(func() { grpcLis.Close() })
 
+	wsLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		c.t.Fatalf("worker ws listen: %v", err)
+	}
+	wsURL := "ws://" + wsLis.Addr().String() + "/ws"
+
 	w := worker.NewWorker(worker.Config{
 		ID:               id,
 		GatewayAddr:      c.gatewayAddr,
 		DrainTimeout:     testDrainTimeout,
 		HealthInterval:   healthInterval,
 		SnapshotInterval: testSnapshotInterval,
+		RegisterInterval: testRegisterInterval,
+		RegisterToken:    c.token,
+		AdvertiseWS:      wsURL,
+		AdvertiseGRPC:    grpcLis.Addr().String(),
+		PendingTTL:       testPendingTTL,
 		Store:            backing,
 	})
 
@@ -272,15 +314,14 @@ func (c *cluster) addWorkerOn(id string, onCreate func(string) worker.State, hea
 	c.t.Cleanup(stopSnapshots)
 	go w.StartSnapshots(snapshotCtx)
 
-	wsLis, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		c.t.Fatalf("worker ws listen: %v", err)
+	if !seed {
+		go w.StartRegistration(snapshotCtx)
 	}
 
 	tw := &testWorker{
 		id:     id,
 		worker: w,
-		wsURL:  "ws://" + wsLis.Addr().String() + "/ws",
+		wsURL:  wsURL,
 		lis:    wsLis,
 	}
 
@@ -296,11 +337,13 @@ func (c *cluster) addWorkerOn(id string, onCreate func(string) worker.State, hea
 	go srv.Serve(wsLis)
 	c.t.Cleanup(tw.kill)
 
-	c.pool.Add(&gateway.WorkerInfo{
-		ID:       id,
-		WSAddr:   tw.wsURL,
-		GRPCAddr: grpcLis.Addr().String(),
-	})
+	if seed {
+		c.pool.Add(&gateway.WorkerInfo{
+			ID:       id,
+			WSAddr:   tw.wsURL,
+			GRPCAddr: grpcLis.Addr().String(),
+		})
+	}
 
 	c.workers = append(c.workers, tw)
 	return tw
@@ -331,8 +374,14 @@ func (f *fakeWorker) HealthStream(req *migratorpb.HealthStreamRequest, stream gr
 	}
 }
 
-func (f *fakeWorker) beat() {
-	f.beats <- struct{}{}
+func (f *fakeWorker) beat(t *testing.T) {
+	t.Helper()
+
+	select {
+	case f.beats <- struct{}{}:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("nothing consumed a heartbeat from %s: is it being monitored?", f.id)
+	}
 }
 
 func (f *fakeWorker) stop() {

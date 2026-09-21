@@ -7,10 +7,6 @@ import (
 )
 
 func (w *Worker) StartSnapshots(ctx context.Context) {
-	if w.store == nil {
-		return
-	}
-
 	ticker := time.NewTicker(w.snapshotInterval)
 	defer ticker.Stop()
 
@@ -19,7 +15,12 @@ func (w *Worker) StartSnapshots(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.snapshotAll(ctx)
+			for _, id := range w.sessions.sweepPending(w.pendingTTL) {
+				log.Printf("[worker-%s] dropped staged state for %s: connection never arrived", w.id, id)
+			}
+			if w.store != nil {
+				w.snapshotAll(ctx)
+			}
 		}
 	}
 }

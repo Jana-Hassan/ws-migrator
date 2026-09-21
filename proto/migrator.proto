@@ -12,6 +12,29 @@ service WorkerService {
 
 service GatewayService {
   rpc Drain(DrainRequest) returns (DrainResponse);
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  rpc Unregister(UnregisterRequest) returns (UnregisterResponse);
+}
+
+message RegisterRequest {
+  string worker_id = 1;
+  string ws_addr = 2;
+  string grpc_addr = 3;
+  string token = 4;
+}
+
+message RegisterResponse {
+  bool ok = 1;
+  string error = 2;
+}
+
+message UnregisterRequest {
+  string worker_id = 1;
+  string token = 2;
+}
+
+message UnregisterResponse {
+  bool ok = 1;
 }
 
 message CheckpointRequest {
@@ -38,6 +61,7 @@ message RestoreResponse {
 message DrainRequest {
   string worker_id = 1;
   string reason = 2;
+  string token = 3;
 }
 
 message DrainResponse {

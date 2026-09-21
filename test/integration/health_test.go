@@ -12,8 +12,8 @@ func TestStreamCloseMarksWorkerUnhealthy(t *testing.T) {
 	fake := c.addFakeWorker("fake-1")
 	c.startHealth()
 
-	fake.beat()
-	fake.beat()
+	fake.beat(t)
+	fake.beat(t)
 	waitFor(t, "fake-1 healthy", func() bool { return c.healthy("fake-1") })
 
 	fake.stop()
@@ -25,8 +25,8 @@ func TestSilentWorkerBecomesUnhealthy(t *testing.T) {
 	fake := c.addFakeWorker("fake-1")
 	c.startHealth()
 
-	fake.beat()
-	fake.beat()
+	fake.beat(t)
+	fake.beat(t)
 	waitFor(t, "fake-1 healthy", func() bool { return c.healthy("fake-1") })
 
 	waitFor(t, "fake-1 unhealthy after silence", func() bool { return !c.healthy("fake-1") })
@@ -37,13 +37,13 @@ func TestBriefGapDoesNotFlipHealth(t *testing.T) {
 	fake := c.addFakeWorker("fake-1")
 	c.startHealth()
 
-	fake.beat()
-	fake.beat()
+	fake.beat(t)
+	fake.beat(t)
 	waitFor(t, "fake-1 healthy", func() bool { return c.healthy("fake-1") })
 
 	for i := 0; i < 4; i++ {
 		time.Sleep(testHealthConfig.Timeout / 2)
-		fake.beat()
+		fake.beat(t)
 		if !c.healthy("fake-1") {
 			t.Fatalf("worker flipped unhealthy during a gap shorter than the timeout")
 		}
@@ -57,8 +57,8 @@ func TestUnhealthyWorkerRecovers(t *testing.T) {
 
 	waitFor(t, "fake-1 unhealthy", func() bool { return !c.healthy("fake-1") })
 
-	fake.beat()
-	fake.beat()
+	fake.beat(t)
+	fake.beat(t)
 	waitFor(t, "fake-1 healthy again", func() bool { return c.healthy("fake-1") })
 }
 

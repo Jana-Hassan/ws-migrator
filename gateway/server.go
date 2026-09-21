@@ -22,6 +22,8 @@ type Server struct {
 	registry   *Registry
 	store      store.Store
 	grpcClient *GRPCClient
+
+	registerToken string
 }
 
 var upgrader = websocket.Upgrader{ //converts http req to ws connection

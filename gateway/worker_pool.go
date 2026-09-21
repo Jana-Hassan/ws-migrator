@@ -43,6 +43,30 @@ func (p *Pool) Get(id string) (WorkerInfo, bool) {
 	return *w, true
 }
 
+func (p *Pool) Update(w *WorkerInfo) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	existing, ok := p.workers[w.ID]
+	if !ok {
+		added := *w
+		added.Healthy = true
+		p.workers[added.ID] = &added
+		return true
+	}
+
+	changed := existing.WSAddr != w.WSAddr || existing.GRPCAddr != w.GRPCAddr
+	existing.WSAddr = w.WSAddr
+	existing.GRPCAddr = w.GRPCAddr
+	return changed
+}
+
+func (p *Pool) Remove(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.workers, id)
+}
+
 func (p *Pool) SetDraining(id string, draining bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

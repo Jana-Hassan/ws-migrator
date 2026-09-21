@@ -16,7 +16,8 @@ func main() {
 	listenAddr := getEnv("LISTEN_ADDR", ":8080")
 	grpcAddr := getEnv("GRPC_ADDR", ":9090")
 	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
-	workersRaw := getEnv("WORKERS", "worker-1|ws://localhost:8081/ws|localhost:9091")
+	workersRaw := getEnv("WORKERS", "")
+	registerToken := getEnv("REGISTER_TOKEN", "")
 
 	s := store.NewRedis(redisAddr)
 
@@ -28,14 +29,15 @@ func main() {
 	pool := gateway.NewPool()
 	for _, w := range parseWorkers(workersRaw) {
 		pool.Add(w)
-		log.Printf("registered worker %s at %s (grpc %s)", w.ID, w.WSAddr, w.GRPCAddr)
-	}
-
-	if pool.Count() == 0 {
-		log.Fatalf("no workers configured")
+		log.Printf("seeded worker %s at %s (grpc %s)", w.ID, w.WSAddr, w.GRPCAddr)
 	}
 
 	server := gateway.NewServer(pool, s)
+	server.SetRegisterToken(registerToken)
+
+	if registerToken == "" {
+		log.Printf("REGISTER_TOKEN is empty: any process that can reach %s may register as a worker", grpcAddr)
+	}
 
 	go func() {
 		if err := server.StartGRPC(grpcAddr); err != nil {

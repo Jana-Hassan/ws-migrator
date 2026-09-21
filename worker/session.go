@@ -33,28 +33,47 @@ func (s *session) write(messageType int, data []byte) error {
 type sessionRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]*session
-	pending  map[string]State
+	pending  map[string]pendingState
+}
+
+type pendingState struct {
+	state    State
+	stagedAt time.Time
 }
 
 func newSessionRegistry() *sessionRegistry {
 	return &sessionRegistry{
 		sessions: make(map[string]*session),
-		pending:  make(map[string]State),
+		pending:  make(map[string]pendingState),
 	}
 }
 
 func (r *sessionRegistry) stage(id string, state State) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pending[id] = state
+	r.pending[id] = pendingState{state: state, stagedAt: time.Now()}
+}
+
+func (r *sessionRegistry) sweepPending(ttl time.Duration) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var dropped []string
+	for id, p := range r.pending {
+		if time.Since(p.stagedAt) >= ttl {
+			delete(r.pending, id)
+			dropped = append(dropped, id)
+		}
+	}
+	return dropped
 }
 
 func (r *sessionRegistry) take(id string) (State, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	state, ok := r.pending[id]
+	p, ok := r.pending[id]
 	delete(r.pending, id)
-	return state, ok
+	return p.state, ok
 }
 
 func (r *sessionRegistry) add(s *session) error {

@@ -26,13 +26,36 @@ func newGatewayClient(addr string) (*gatewayClient, error) {
 	}, nil
 }
 
-func (c *gatewayClient) drain(workerID, reason string) (*migratorpb.DrainResponse, error) {
+func (c *gatewayClient) drain(workerID, reason, token string) (*migratorpb.DrainResponse, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	return c.client.Drain(ctx, &migratorpb.DrainRequest{
 		WorkerId: workerID,
 		Reason:   reason,
+		Token:    token,
+	})
+}
+
+func (c *gatewayClient) register(workerID, wsAddr, grpcAddr, token string) (*migratorpb.RegisterResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return c.client.Register(ctx, &migratorpb.RegisterRequest{
+		WorkerId: workerID,
+		WsAddr:   wsAddr,
+		GrpcAddr: grpcAddr,
+		Token:    token,
+	})
+}
+
+func (c *gatewayClient) unregister(workerID, token string) (*migratorpb.UnregisterResponse, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	return c.client.Unregister(ctx, &migratorpb.UnregisterRequest{
+		WorkerId: workerID,
+		Token:    token,
 	})
 }
 

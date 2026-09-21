@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,6 +24,8 @@ const (
 	defaultHealthInterval   = 5 * time.Second
 	defaultSnapshotInterval = 5 * time.Second
 	writeWait               = 10 * time.Second
+	defaultRegisterInterval = 30 * time.Second
+	defaultPendingTTL       = 60 * time.Second
 )
 
 type Worker struct {
@@ -33,6 +36,13 @@ type Worker struct {
 	drainTimeout     time.Duration
 	healthInterval   time.Duration
 	snapshotInterval time.Duration
+	registerInterval time.Duration
+	pendingTTL       time.Duration
+	registerToken    string
+	advertiseWS      string
+	advertiseGRPC    string
+	draining         chan struct{}
+	drainOnce        sync.Once
 	store            store.Store
 	sessions         *sessionRegistry
 	onMessage        func(sessionID string, state State, msg []byte) []byte
@@ -48,6 +58,11 @@ type Config struct {
 	DrainTimeout     time.Duration
 	HealthInterval   time.Duration
 	SnapshotInterval time.Duration
+	RegisterInterval time.Duration
+	PendingTTL       time.Duration
+	RegisterToken    string
+	AdvertiseWS      string
+	AdvertiseGRPC    string
 	Store            store.Store
 }
 
@@ -69,6 +84,18 @@ func NewWorker(cfg Config) *Worker {
 	if cfg.SnapshotInterval == 0 {
 		cfg.SnapshotInterval = defaultSnapshotInterval
 	}
+	if cfg.RegisterInterval == 0 {
+		cfg.RegisterInterval = defaultRegisterInterval
+	}
+	if cfg.PendingTTL == 0 {
+		cfg.PendingTTL = defaultPendingTTL
+	}
+	if cfg.AdvertiseWS == "" {
+		cfg.AdvertiseWS = advertised("ws://", cfg.WSAddr, "/ws")
+	}
+	if cfg.AdvertiseGRPC == "" {
+		cfg.AdvertiseGRPC = advertised("", cfg.GRPCAddr, "")
+	}
 
 	return &Worker{
 		id:               cfg.ID,
@@ -78,6 +105,12 @@ func NewWorker(cfg Config) *Worker {
 		drainTimeout:     cfg.DrainTimeout,
 		healthInterval:   cfg.HealthInterval,
 		snapshotInterval: cfg.SnapshotInterval,
+		registerInterval: cfg.RegisterInterval,
+		pendingTTL:       cfg.PendingTTL,
+		registerToken:    cfg.RegisterToken,
+		advertiseWS:      cfg.AdvertiseWS,
+		advertiseGRPC:    cfg.AdvertiseGRPC,
+		draining:         make(chan struct{}),
 		store:            cfg.Store,
 		sessions:         newSessionRegistry(),
 	}
@@ -119,6 +152,7 @@ func (w *Worker) Start() error {
 	snapshotCtx, stopSnapshots := context.WithCancel(context.Background())
 	defer stopSnapshots()
 	go w.StartSnapshots(snapshotCtx)
+	go w.StartRegistration(snapshotCtx)
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, os.Interrupt)
@@ -133,6 +167,9 @@ func (w *Worker) Start() error {
 }
 
 func (w *Worker) Drain(reason string) {
+	w.drainOnce.Do(func() { close(w.draining) })
+	defer w.unregister()
+
 	if w.gatewayAddr == "" {
 		log.Printf("[worker-%s] no gateway address set, shutting down with %d sessions", w.id, w.sessions.count())
 		return
@@ -147,7 +184,7 @@ func (w *Worker) Drain(reason string) {
 
 	deadline := time.Now().Add(w.drainTimeout)
 	for {
-		resp, err := client.drain(w.id, reason)
+		resp, err := client.drain(w.id, reason, w.registerToken)
 		if err != nil {
 			log.Printf("[worker-%s] drain call failed: %v", w.id, err)
 		} else if !resp.Accepted {
@@ -268,4 +305,17 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func advertised(scheme, listenAddr, path string) string {
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return ""
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		if name, err := os.Hostname(); err == nil {
+			host = name
+		}
+	}
+	return scheme + net.JoinHostPort(host, port) + path
 }

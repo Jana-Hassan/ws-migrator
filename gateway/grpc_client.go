@@ -95,6 +95,16 @@ func (c *GRPCClient) HealthStream(ctx context.Context, workerID string) (grpc.Se
 	return client.HealthStream(ctx, &migratorpb.HealthStreamRequest{})
 }
 
+func (c *GRPCClient) Invalidate(workerID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if conn, ok := c.conns[workerID]; ok {
+		conn.Close()
+		delete(c.conns, workerID)
+	}
+}
+
 func (c *GRPCClient) Close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
