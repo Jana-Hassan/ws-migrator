@@ -14,12 +14,13 @@ type State interface {
 }
 
 type session struct {
-	mu      sync.Mutex
-	writeMu sync.Mutex
-	id      string
-	conn    *websocket.Conn
-	state   State
-	dirty   bool
+	mu         sync.Mutex
+	writeMu    sync.Mutex
+	id         string
+	conn       *websocket.Conn
+	state      State
+	dirty      bool
+	appliedSeq uint64
 }
 
 func (s *session) write(messageType int, data []byte) error {
@@ -37,8 +38,9 @@ type sessionRegistry struct {
 }
 
 type pendingState struct {
-	state    State
-	stagedAt time.Time
+	state      State
+	stagedAt   time.Time
+	appliedSeq uint64
 }
 
 func newSessionRegistry() *sessionRegistry {
@@ -48,10 +50,10 @@ func newSessionRegistry() *sessionRegistry {
 	}
 }
 
-func (r *sessionRegistry) stage(id string, state State) {
+func (r *sessionRegistry) stage(id string, state State, appliedSeq uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pending[id] = pendingState{state: state, stagedAt: time.Now()}
+	r.pending[id] = pendingState{state: state, stagedAt: time.Now(), appliedSeq: appliedSeq}
 }
 
 func (r *sessionRegistry) sweepPending(ttl time.Duration) []string {
@@ -68,12 +70,12 @@ func (r *sessionRegistry) sweepPending(ttl time.Duration) []string {
 	return dropped
 }
 
-func (r *sessionRegistry) take(id string) (State, bool) {
+func (r *sessionRegistry) take(id string) (State, uint64, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p, ok := r.pending[id]
 	delete(r.pending, id)
-	return p.state, ok
+	return p.state, p.appliedSeq, ok
 }
 
 func (r *sessionRegistry) add(s *session) error {

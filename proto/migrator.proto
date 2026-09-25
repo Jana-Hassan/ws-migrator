@@ -46,11 +46,13 @@ message CheckpointResponse {
   bytes state = 2;
   bool ok = 3;
   string error = 4;
+  uint64 applied_seq = 5;
 }
 
 message RestoreRequest {
   string session_id = 1;
   bytes state = 2;
+  uint64 applied_seq = 3;
 }
 
 message RestoreResponse {

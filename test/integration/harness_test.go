@@ -151,7 +151,7 @@ func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
 func (c *cluster) snapshot(sessionID string) (string, bool) {
 	c.t.Helper()
 
-	state, err := c.store.LoadSnapshot(context.Background(), sessionID)
+	state, _, err := c.store.LoadSnapshot(context.Background(), sessionID)
 	if err != nil || state == nil {
 		return "", false
 	}
@@ -354,6 +354,32 @@ type fakeWorker struct {
 	id    string
 	beats chan struct{}
 	srv   *grpc.Server
+
+	wsURL string
+	wsLis net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (f *fakeWorker) Restore(ctx context.Context, req *migratorpb.RestoreRequest) (*migratorpb.RestoreResponse, error) {
+	return &migratorpb.RestoreResponse{Ok: true}, nil
+}
+
+func (f *fakeWorker) Checkpoint(ctx context.Context, req *migratorpb.CheckpointRequest) (*migratorpb.CheckpointResponse, error) {
+	return &migratorpb.CheckpointResponse{SessionId: req.SessionId, Ok: true}, nil
+}
+
+func (f *fakeWorker) kill() {
+	if f.wsLis != nil {
+		f.wsLis.Close()
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, conn := range f.conns {
+		conn.Close()
+	}
+	f.conns = nil
 }
 
 func (f *fakeWorker) HealthStream(req *migratorpb.HealthStreamRequest, stream grpc.ServerStreamingServer[migratorpb.HealthUpdate]) error {
@@ -390,26 +416,68 @@ func (f *fakeWorker) stop() {
 
 func (c *cluster) addFakeWorker(id string) *fakeWorker {
 	c.t.Helper()
+	return c.addFakeWorkerOn(id, "ws://127.0.0.1:1/ws", nil)
+}
+
+func (c *cluster) addBlackHoleWorker(id string) *fakeWorker {
+	c.t.Helper()
+
+	wsLis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		c.t.Fatalf("black hole listen: %v", err)
+	}
+	return c.addFakeWorkerOn(id, "ws://"+wsLis.Addr().String()+"/ws", wsLis)
+}
+
+func (c *cluster) addFakeWorkerOn(id, wsURL string, wsLis net.Listener) *fakeWorker {
+	c.t.Helper()
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		c.t.Fatalf("fake worker listen: %v", err)
 	}
 
-	f := &fakeWorker{id: id, beats: make(chan struct{}), srv: grpc.NewServer()}
+	f := &fakeWorker{id: id, beats: make(chan struct{}), srv: grpc.NewServer(), wsURL: wsURL, wsLis: wsLis}
 	migratorpb.RegisterWorkerServiceServer(f.srv, f)
 
 	go f.srv.Serve(lis)
 	c.t.Cleanup(f.srv.Stop)
+	c.t.Cleanup(f.kill)
+
+	if wsLis != nil {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ws", func(wr http.ResponseWriter, r *http.Request) {
+			conn, err := upgrader.Upgrade(wr, r, nil)
+			if err != nil {
+				return
+			}
+			<-r.Context().Done()
+			conn.Close()
+		})
+
+		srv := &http.Server{
+			Handler: mux,
+			ConnState: func(conn net.Conn, state http.ConnState) {
+				if state == http.StateHijacked {
+					f.mu.Lock()
+					f.conns = append(f.conns, conn)
+					f.mu.Unlock()
+				}
+			},
+		}
+		go srv.Serve(wsLis)
+	}
 
 	c.pool.Add(&gateway.WorkerInfo{
 		ID:       id,
-		WSAddr:   "ws://127.0.0.1:1/ws",
+		WSAddr:   wsURL,
 		GRPCAddr: lis.Addr().String(),
 	})
 
 	return f
 }
+
+var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
 func (c *cluster) otherWorker(id string) string {
 	c.t.Helper()

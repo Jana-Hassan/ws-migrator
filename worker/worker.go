@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Jana-Hassan/ws-migrator/internal/frame"
 	migratorpb "github.com/Jana-Hassan/ws-migrator/proto"
 	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/gorilla/websocket"
@@ -255,8 +256,9 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		conn: conn,
 	}
 
-	if state, ok := w.sessions.take(sessionID); ok {
+	if state, appliedSeq, ok := w.sessions.take(sessionID); ok {
 		s.state = state
+		s.appliedSeq = appliedSeq
 	} else if w.onCreate != nil {
 		s.state = w.onCreate(sessionID)
 	}
@@ -290,13 +292,26 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		seq, payload, ok := frame.Decode(msg)
+		if !ok {
+			log.Printf("[worker-%s] session %s: malformed frame, dropped", w.id, sessionID)
+			continue
+		}
+
 		s.mu.Lock()
+		if seq <= s.appliedSeq {
+			s.mu.Unlock()
+			log.Printf("[worker-%s] session %s: skipped duplicate seq %d", w.id, sessionID, seq)
+			continue
+		}
+
 		var response []byte
 		if w.onMessage != nil {
-			response = w.onMessage(sessionID, s.state, msg)
+			response = w.onMessage(sessionID, s.state, payload)
 		} else {
-			response = msg
+			response = payload
 		}
+		s.appliedSeq = seq
 		s.dirty = true
 		s.mu.Unlock()
 

@@ -339,6 +339,7 @@ type CheckpointResponse struct {
 	State         []byte                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
 	Ok            bool                   `protobuf:"varint,3,opt,name=ok,proto3" json:"ok,omitempty"`
 	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	AppliedSeq    uint64                 `protobuf:"varint,5,opt,name=applied_seq,json=appliedSeq,proto3" json:"applied_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -401,10 +402,18 @@ func (x *CheckpointResponse) GetError() string {
 	return ""
 }
 
+func (x *CheckpointResponse) GetAppliedSeq() uint64 {
+	if x != nil {
+		return x.AppliedSeq
+	}
+	return 0
+}
+
 type RestoreRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	State         []byte                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
+	AppliedSeq    uint64                 `protobuf:"varint,3,opt,name=applied_seq,json=appliedSeq,proto3" json:"applied_seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -451,6 +460,13 @@ func (x *RestoreRequest) GetState() []byte {
 		return x.State
 	}
 	return nil
+}
+
+func (x *RestoreRequest) GetAppliedSeq() uint64 {
+	if x != nil {
+		return x.AppliedSeq
+	}
+	return 0
 }
 
 type RestoreResponse struct {
@@ -741,17 +757,21 @@ const file_proto_migrator_proto_rawDesc = "" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\"2\n" +
 	"\x11CheckpointRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"o\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\"\x90\x01\n" +
 	"\x12CheckpointResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\fR\x05state\x12\x0e\n" +
 	"\x02ok\x18\x03 \x01(\bR\x02ok\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"E\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1f\n" +
+	"\vapplied_seq\x18\x05 \x01(\x04R\n" +
+	"appliedSeq\"f\n" +
 	"\x0eRestoreRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
-	"\x05state\x18\x02 \x01(\fR\x05state\"7\n" +
+	"\x05state\x18\x02 \x01(\fR\x05state\x12\x1f\n" +
+	"\vapplied_seq\x18\x03 \x01(\x04R\n" +
+	"appliedSeq\"7\n" +
 	"\x0fRestoreResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"Y\n" +

@@ -18,6 +18,49 @@ type Session struct {
 	ConnectedAt    time.Time
 	mu             sync.Mutex
 	migrateChannel chan string
+
+	seq      uint64
+	outbound []bufferedMessage
+}
+
+type bufferedMessage struct {
+	seq         uint64
+	messageType int
+	data        []byte
+}
+
+func (s *Session) bufferOutbound(messageType int, data []byte) bufferedMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.seq++
+	msg := bufferedMessage{seq: s.seq, messageType: messageType, data: data}
+
+	s.outbound = append(s.outbound, msg)
+	if len(s.outbound) > outboundBufferSize {
+		s.outbound = s.outbound[len(s.outbound)-outboundBufferSize:]
+	}
+
+	return msg
+}
+
+func (s *Session) outboundAfter(appliedSeq uint64) ([]bufferedMessage, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.outbound) == 0 {
+		return nil, false
+	}
+
+	gap := s.outbound[0].seq > appliedSeq+1
+
+	var pending []bufferedMessage
+	for _, msg := range s.outbound {
+		if msg.seq > appliedSeq {
+			pending = append(pending, msg)
+		}
+	}
+	return pending, gap
 }
 
 // tracks all active sessions in the gateway

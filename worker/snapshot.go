@@ -27,31 +27,31 @@ func (w *Worker) StartSnapshots(ctx context.Context) {
 
 func (w *Worker) snapshotAll(ctx context.Context) {
 	for _, s := range w.sessions.all() {
-		state, ok := s.takeSnapshot()
+		state, appliedSeq, ok := s.takeSnapshot()
 		if !ok {
 			continue
 		}
 
-		if err := w.store.SaveSnapshot(ctx, s.id, state); err != nil {
+		if err := w.store.SaveSnapshot(ctx, s.id, state, appliedSeq); err != nil {
 			log.Printf("[worker-%s] snapshot %s failed: %v", w.id, s.id, err)
 		}
 	}
 }
 
-func (s *session) takeSnapshot() ([]byte, bool) {
+func (s *session) takeSnapshot() ([]byte, uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if !s.dirty || s.state == nil {
-		return nil, false
+		return nil, 0, false
 	}
 
 	state, err := s.state.Serialize()
 	if err != nil {
 		log.Printf("snapshot %s: serialize failed: %v", s.id, err)
-		return nil, false
+		return nil, 0, false
 	}
 
 	s.dirty = false
-	return state, true
+	return state, s.appliedSeq, true
 }

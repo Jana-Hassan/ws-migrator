@@ -30,6 +30,9 @@ func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(ses
 
 func (g *grpcServer) Restore(ctx context.Context, req *migratorpb.RestoreRequest) (*migratorpb.RestoreResponse, error) {
 	if len(req.State) == 0 {
+		if req.AppliedSeq > 0 && g.onCreate != nil {
+			g.sessions.stage(req.SessionId, g.onCreate(req.SessionId), req.AppliedSeq)
+		}
 		return &migratorpb.RestoreResponse{Ok: true}, nil
 	}
 	if g.onCreate == nil {
@@ -41,7 +44,7 @@ func (g *grpcServer) Restore(ctx context.Context, req *migratorpb.RestoreRequest
 		return &migratorpb.RestoreResponse{Ok: false, Error: err.Error()}, nil
 	}
 
-	g.sessions.stage(req.SessionId, state)
+	g.sessions.stage(req.SessionId, state, req.AppliedSeq)
 	log.Printf("[worker-%s] restored session %s", g.workerID, req.SessionId)
 
 	return &migratorpb.RestoreResponse{Ok: true}, nil
@@ -72,9 +75,10 @@ func (g *grpcServer) Checkpoint(ctx context.Context, req *migratorpb.CheckpointR
 	log.Printf("[worker-%s] checkpointed session %s", g.workerID, req.SessionId)
 
 	return &migratorpb.CheckpointResponse{
-		SessionId: req.SessionId,
-		State:     stateBytes,
-		Ok:        true,
+		SessionId:  req.SessionId,
+		State:      stateBytes,
+		Ok:         true,
+		AppliedSeq: session.appliedSeq,
 	}, nil
 }
 

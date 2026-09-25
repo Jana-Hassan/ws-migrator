@@ -5,16 +5,21 @@ import (
 	"sync"
 )
 
+type snapshot struct {
+	state      []byte
+	appliedSeq uint64
+}
+
 type MemoryStore struct {
 	mu        sync.RWMutex
 	sessions  map[string]SessionData
-	snapshots map[string][]byte
+	snapshots map[string]snapshot
 }
 
 func NewMemory() *MemoryStore {
 	return &MemoryStore{
 		sessions:  make(map[string]SessionData),
-		snapshots: make(map[string][]byte),
+		snapshots: make(map[string]snapshot),
 	}
 }
 
@@ -43,28 +48,28 @@ func (s *MemoryStore) Delete(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (s *MemoryStore) SaveSnapshot(ctx context.Context, sessionID string, state []byte) error {
+func (s *MemoryStore) SaveSnapshot(ctx context.Context, sessionID string, state []byte, appliedSeq uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	stored := make([]byte, len(state))
 	copy(stored, state)
-	s.snapshots[sessionID] = stored
+	s.snapshots[sessionID] = snapshot{state: stored, appliedSeq: appliedSeq}
 	return nil
 }
 
-func (s *MemoryStore) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, error) {
+func (s *MemoryStore) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	state, ok := s.snapshots[sessionID]
+	stored, ok := s.snapshots[sessionID]
 	if !ok {
-		return nil, nil
+		return nil, 0, nil
 	}
 
-	loaded := make([]byte, len(state))
-	copy(loaded, state)
-	return loaded, nil
+	loaded := make([]byte, len(stored.state))
+	copy(loaded, stored.state)
+	return loaded, stored.appliedSeq, nil
 }
 
 func (s *MemoryStore) DeleteSnapshot(ctx context.Context, sessionID string) error {

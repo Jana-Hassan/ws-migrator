@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Jana-Hassan/ws-migrator/internal/frame"
 	"github.com/Jana-Hassan/ws-migrator/store"
 	"github.com/gorilla/websocket"
 )
 
 const (
+	outboundBufferSize = 1024
+
 	pongWait   = 60 * time.Second
 	pingPeriod = 50 * time.Second
 	writeWait  = 10 * time.Second
@@ -298,12 +301,19 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 	for {
 		select {
 		case msg, ok := <-clientMessages:
-			if ok && workerConn.WriteMessage(msg.messageType, msg.data) == nil {
-				continue
+			if !ok {
+				workerConn.Close()
+				<-workerDone
+				return false
 			}
-			workerConn.Close()
-			<-workerDone
-			return false
+
+			buffered := session.bufferOutbound(msg.messageType, msg.data)
+			if err := workerConn.WriteMessage(buffered.messageType, frame.Encode(buffered.seq, buffered.data)); err != nil {
+				log.Printf("session %s: write to worker failed: %v", session.ID, err)
+				workerConn.Close()
+				<-workerDone
+				return s.recoverSession(session)
+			}
 
 		case <-workerDone:
 			workerConn.Close()
@@ -377,11 +387,11 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 		return false
 	}
 
-	if !s.placeOnWorker(ctx, session, target, resp.State) {
+	if !s.placeOnWorker(ctx, session, target, resp.State, resp.AppliedSeq) {
 		return false
 	}
 
-	if err := s.store.SaveSnapshot(ctx, session.ID, resp.State); err != nil {
+	if err := s.store.SaveSnapshot(ctx, session.ID, resp.State, resp.AppliedSeq); err != nil {
 		log.Printf("warning: could not snapshot session %s after migration: %v", session.ID, err)
 	}
 
@@ -389,8 +399,8 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 	return true
 }
 
-func (s *Server) placeOnWorker(ctx context.Context, session *Session, target WorkerInfo, state []byte) bool {
-	restored, err := s.grpcClient.Restore(ctx, target.ID, session.ID, state)
+func (s *Server) placeOnWorker(ctx context.Context, session *Session, target WorkerInfo, state []byte, appliedSeq uint64) bool {
+	restored, err := s.grpcClient.Restore(ctx, target.ID, session.ID, state, appliedSeq)
 	if err != nil {
 		log.Printf("placement failed: restore error: %v", err)
 		return false
@@ -415,6 +425,26 @@ func (s *Server) placeOnWorker(ctx context.Context, session *Session, target Wor
 	session.mu.Unlock()
 
 	s.registry.UpdateWorker(session.ID, target.ID)
+
+	return s.resendPending(session, workerConn, appliedSeq)
+}
+
+func (s *Server) resendPending(session *Session, workerConn *websocket.Conn, appliedSeq uint64) bool {
+	pending, gap := session.outboundAfter(appliedSeq)
+	if gap {
+		log.Printf("session %s: resend gap after seq %d, messages were dropped from the buffer", session.ID, appliedSeq)
+	}
+
+	for _, msg := range pending {
+		if err := workerConn.WriteMessage(msg.messageType, frame.Encode(msg.seq, msg.data)); err != nil {
+			log.Printf("session %s: resend of seq %d failed: %v", session.ID, msg.seq, err)
+			return false
+		}
+	}
+
+	if len(pending) > 0 {
+		log.Printf("session %s: resent %d messages after seq %d", session.ID, len(pending), appliedSeq)
+	}
 	return true
 }
 
@@ -431,15 +461,15 @@ func (s *Server) recoverSession(session *Session) bool {
 		return false
 	}
 
-	state, err := s.store.LoadSnapshot(ctx, session.ID)
+	state, appliedSeq, err := s.store.LoadSnapshot(ctx, session.ID)
 	if err != nil {
 		log.Printf("recovery failed: could not load snapshot for %s: %v", session.ID, err)
 		return false
 	}
 
-	log.Printf("recovering session %s from %s onto %s (%d state bytes)", session.ID, deadWorker, target.ID, len(state))
+	log.Printf("recovering session %s from %s onto %s (%d state bytes, applied seq %d)", session.ID, deadWorker, target.ID, len(state), appliedSeq)
 
-	if !s.placeOnWorker(ctx, session, target, state) {
+	if !s.placeOnWorker(ctx, session, target, state, appliedSeq) {
 		return false
 	}
 
