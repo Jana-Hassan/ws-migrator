@@ -508,6 +508,11 @@ type testClient struct {
 	session string
 }
 
+func dialGateway(c *cluster) (*websocket.Conn, *http.Response, error) {
+	url := "ws" + strings.TrimPrefix(c.http.URL, "http") + "/ws"
+	return websocket.DefaultDialer.Dial(url, nil)
+}
+
 func (c *cluster) connect() *testClient {
 	c.t.Helper()
 

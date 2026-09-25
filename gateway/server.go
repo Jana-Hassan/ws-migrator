@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,6 +26,7 @@ type Server struct {
 	registry   *Registry
 	store      store.Store
 	grpcClient *GRPCClient
+	metrics    Metrics
 
 	registerToken string
 }
@@ -76,6 +78,13 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("/admin/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(s.Stats()); err != nil {
+			log.Printf("stats encode failed: %v", err)
+		}
+	})
+
 	mux.HandleFunc("/admin/checkpoint", func(w http.ResponseWriter, r *http.Request) {
 		sessionID := r.URL.Query().Get("session_id")
 		if sessionID == "" {
@@ -133,6 +142,7 @@ func (s *Server) startSession(id, workerID string, clientConn, workerConn *webso
 		migrateChannel: make(chan string, 1),
 	}
 	s.registry.Add(session)
+	s.metrics.sessionsStarted.Add(1)
 
 	err := s.store.Save(context.Background(), &store.SessionData{
 		ID:          session.ID,
@@ -150,6 +160,7 @@ func (s *Server) startSession(id, workerID string, clientConn, workerConn *webso
 
 func (s *Server) endSession(session *Session) {
 	s.registry.Remove(session.ID)
+	s.metrics.sessionsEnded.Add(1)
 	err := s.store.Delete(context.Background(), session.ID)
 	if err != nil {
 		log.Printf("failed to delete session %s from Redis: %v", session.ID, err)
@@ -174,6 +185,7 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 
 	worker, ok := s.pickWorker("")
 	if !ok {
+		s.metrics.sessionsRejected.Add(1)
 		log.Printf("no workers available")
 		clientConn.WriteMessage(
 			websocket.CloseMessage,
@@ -188,6 +200,7 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 	workerURL := worker.WSAddr + "?session_id=" + sessionID
 	workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 	if err != nil {
+		s.metrics.sessionsRejected.Add(1)
 		log.Printf("failed to connect to worker: %v", err)
 		clientConn.WriteMessage(
 			websocket.CloseMessage,
@@ -308,12 +321,15 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 			}
 
 			buffered := session.bufferOutbound(msg.messageType, msg.data)
-			if err := workerConn.WriteMessage(buffered.messageType, frame.Encode(buffered.seq, buffered.data)); err != nil {
+			if err := workerConn.WriteMessage(buffered.messageType, frame.Encode(buffered.seq, buffered.data)); err == nil {
+				s.metrics.messagesForwarded.Add(1)
+			} else {
 				log.Printf("session %s: write to worker failed: %v", session.ID, err)
 				workerConn.Close()
 				<-workerDone
 				return s.recoverSession(session)
 			}
+			continue
 
 		case <-workerDone:
 			workerConn.Close()
@@ -356,6 +372,18 @@ func (s *Server) pipeMessages(src, dst *websocket.Conn, direction string) {
 }
 
 func (s *Server) migrate(session *Session, targetWorkerID string) bool {
+	s.metrics.migrationsAttempted.Add(1)
+
+	ok := s.doMigrate(session, targetWorkerID)
+	if ok {
+		s.metrics.migrationsSucceeded.Add(1)
+	} else {
+		s.metrics.migrationsFailed.Add(1)
+	}
+	return ok
+}
+
+func (s *Server) doMigrate(session *Session, targetWorkerID string) bool {
 	log.Printf("migrating session %s from %s to %s", session.ID, session.WorkerID, targetWorkerID)
 	if targetWorkerID == session.WorkerID {
 		log.Printf("migration failed: session %s already on %s", session.ID, targetWorkerID)
@@ -392,6 +420,7 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 	}
 
 	if err := s.store.SaveSnapshot(ctx, session.ID, resp.State, resp.AppliedSeq); err != nil {
+		s.metrics.snapshotWriteFailures.Add(1)
 		log.Printf("warning: could not snapshot session %s after migration: %v", session.ID, err)
 	}
 
@@ -432,6 +461,7 @@ func (s *Server) placeOnWorker(ctx context.Context, session *Session, target Wor
 func (s *Server) resendPending(session *Session, workerConn *websocket.Conn, appliedSeq uint64) bool {
 	pending, gap := session.outboundAfter(appliedSeq)
 	if gap {
+		s.metrics.resendGaps.Add(1)
 		log.Printf("session %s: resend gap after seq %d, messages were dropped from the buffer", session.ID, appliedSeq)
 	}
 
@@ -443,12 +473,25 @@ func (s *Server) resendPending(session *Session, workerConn *websocket.Conn, app
 	}
 
 	if len(pending) > 0 {
+		s.metrics.resendsSent.Add(uint64(len(pending)))
 		log.Printf("session %s: resent %d messages after seq %d", session.ID, len(pending), appliedSeq)
 	}
 	return true
 }
 
 func (s *Server) recoverSession(session *Session) bool {
+	s.metrics.recoveriesAttempted.Add(1)
+
+	ok := s.doRecoverSession(session)
+	if ok {
+		s.metrics.recoveriesSucceeded.Add(1)
+	} else {
+		s.metrics.recoveriesFailed.Add(1)
+	}
+	return ok
+}
+
+func (s *Server) doRecoverSession(session *Session) bool {
 	ctx := context.Background()
 
 	session.mu.Lock()
