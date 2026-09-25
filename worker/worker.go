@@ -120,6 +120,10 @@ func NewWorker(cfg Config) *Worker {
 	}
 }
 
+func (w *Worker) snapshotStats() (failures, written uint64) {
+	return w.snapshotFailures.Load(), w.snapshotsWritten.Load()
+}
+
 func (w *Worker) OnMessage(fn func(sessionID string, state State, msg []byte) []byte) {
 	w.onMessage = fn
 }
@@ -221,7 +225,7 @@ func (w *Worker) startGRPC() error {
 
 func (w *Worker) StartGRPCOn(lis net.Listener) error {
 	srv := grpc.NewServer()
-	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w, w.sessions, w.onCreate, w.healthInterval))
+	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions, w.onCreate, w.healthInterval, w))
 	return srv.Serve(lis)
 }
 

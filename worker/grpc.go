@@ -11,22 +11,26 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type statsSource interface {
+	snapshotStats() (failures, written uint64)
+}
+
 type grpcServer struct {
 	migratorpb.UnimplementedWorkerServiceServer
-	worker         *Worker
 	sessions       *sessionRegistry
 	workerID       string
 	onCreate       func(sessionID string) State
 	healthInterval time.Duration
+	stats          statsSource
 }
 
-func newGRPCServer(w *Worker, sessions *sessionRegistry, onCreate func(sessionID string) State, healthInterval time.Duration) *grpcServer {
+func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(sessionID string) State, healthInterval time.Duration, stats statsSource) *grpcServer {
 	return &grpcServer{
-		worker:         w,
-		workerID:       w.id,
+		workerID:       workerID,
 		sessions:       sessions,
 		onCreate:       onCreate,
 		healthInterval: healthInterval,
+		stats:          stats,
 	}
 }
 
@@ -93,13 +97,15 @@ func (g *grpcServer) HealthStream(req *migratorpb.HealthStreamRequest, stream gr
 		case <-stream.Context().Done():
 			return nil
 		case <-ticker.C:
+			failures, written := g.stats.snapshotStats()
+
 			err := stream.Send(&migratorpb.HealthUpdate{
 				WorkerId:         g.workerID,
 				SessionCount:     int32(g.sessions.count()),
 				Status:           migratorpb.WorkerStatus_WORKER_STATUS_SERVING,
 				UnixMs:           time.Now().UnixMilli(),
-				SnapshotFailures: g.worker.snapshotFailures.Load(),
-				SnapshotsWritten: g.worker.snapshotsWritten.Load(),
+				SnapshotFailures: failures,
+				SnapshotsWritten: written,
 			})
 			if err != nil {
 				return err
