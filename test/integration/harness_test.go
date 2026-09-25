@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,13 +68,41 @@ func (f *failingState) Serialize() ([]byte, error) {
 	return nil, fmt.Errorf("serialize refused")
 }
 
+type trackingListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func (l *trackingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err == nil {
+		l.mu.Lock()
+		l.conns = append(l.conns, conn)
+		l.mu.Unlock()
+	}
+	return conn, err
+}
+
+func (l *trackingListener) killAll() {
+	l.Listener.Close()
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, conn := range l.conns {
+		conn.Close()
+	}
+	l.conns = nil
+}
+
 type testWorker struct {
-	id     string
-	worker *worker.Worker
-	wsURL  string
-	lis    net.Listener
-	mu     sync.Mutex
-	conns  []net.Conn
+	id      string
+	worker  *worker.Worker
+	wsURL   string
+	lis     net.Listener
+	grpcLis *trackingListener
+	mu      sync.Mutex
+	conns   []net.Conn
 }
 
 func (tw *testWorker) track(conn net.Conn) {
@@ -84,6 +113,9 @@ func (tw *testWorker) track(conn net.Conn) {
 
 func (tw *testWorker) kill() {
 	tw.lis.Close()
+	if tw.grpcLis != nil {
+		tw.grpcLis.killAll()
+	}
 
 	tw.mu.Lock()
 	defer tw.mu.Unlock()
@@ -103,7 +135,8 @@ type cluster struct {
 	redis       *miniredis.Miniredis
 	store       store.Store
 
-	token string
+	token        string
+	drainTimeout time.Duration
 
 	endsMu sync.Mutex
 	ends   []sessionEnd
@@ -200,12 +233,27 @@ func newClusterOn(t *testing.T, workerCount int, onCreate func(string) worker.St
 	httpSrv := httptest.NewServer(gw.Handler())
 	t.Cleanup(httpSrv.Close)
 
-	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis, store: backing}
+	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis, store: backing, drainTimeout: testDrainTimeout}
 
 	for i := 1; i <= workerCount; i++ {
 		c.addWorker(fmt.Sprintf("worker-%d", i), onCreate, testHealthInterval)
 	}
 
+	return c
+}
+
+func newClusterDrainTimeout(t *testing.T, workerCount int, drainTimeout time.Duration) *cluster {
+	t.Helper()
+
+	onCreate := func(sessionID string) worker.State { return &counter{} }
+	redis := miniredis.RunT(t)
+
+	c := newClusterOn(t, 0, onCreate, store.NewRedis(redis.Addr()), redis)
+	c.drainTimeout = drainTimeout
+
+	for i := 1; i <= workerCount; i++ {
+		c.addWorker(fmt.Sprintf("worker-%d", i), onCreate, testHealthInterval)
+	}
 	return c
 }
 
@@ -265,11 +313,12 @@ func (c *cluster) addSelfRegisteringWorker(id string) *testWorker {
 func (c *cluster) buildWorker(id string, onCreate func(string) worker.State, healthInterval time.Duration, backing store.Store, seed bool) *testWorker {
 	c.t.Helper()
 
-	grpcLis, err := net.Listen("tcp", "127.0.0.1:0")
+	rawGRPCLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		c.t.Fatalf("worker grpc listen: %v", err)
 	}
-	c.t.Cleanup(func() { grpcLis.Close() })
+	grpcLis := &trackingListener{Listener: rawGRPCLis}
+	c.t.Cleanup(grpcLis.killAll)
 
 	wsLis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -280,7 +329,7 @@ func (c *cluster) buildWorker(id string, onCreate func(string) worker.State, hea
 	w := worker.NewWorker(worker.Config{
 		ID:               id,
 		GatewayAddr:      c.gatewayAddr,
-		DrainTimeout:     testDrainTimeout,
+		DrainTimeout:     c.drainTimeout,
 		HealthInterval:   healthInterval,
 		SnapshotInterval: testSnapshotInterval,
 		RegisterInterval: testRegisterInterval,
@@ -319,10 +368,11 @@ func (c *cluster) buildWorker(id string, onCreate func(string) worker.State, hea
 	}
 
 	tw := &testWorker{
-		id:     id,
-		worker: w,
-		wsURL:  wsURL,
-		lis:    wsLis,
+		id:      id,
+		worker:  w,
+		wsURL:   wsURL,
+		lis:     wsLis,
+		grpcLis: grpcLis,
 	}
 
 	srv := &http.Server{
@@ -355,6 +405,8 @@ type fakeWorker struct {
 	beats chan struct{}
 	srv   *grpc.Server
 
+	rejectRestore bool
+
 	wsURL string
 	wsLis net.Listener
 	mu    sync.Mutex
@@ -362,6 +414,9 @@ type fakeWorker struct {
 }
 
 func (f *fakeWorker) Restore(ctx context.Context, req *migratorpb.RestoreRequest) (*migratorpb.RestoreResponse, error) {
+	if f.rejectRestore {
+		return &migratorpb.RestoreResponse{Ok: false, Error: "restore refused"}, nil
+	}
 	return &migratorpb.RestoreResponse{Ok: true}, nil
 }
 
@@ -417,6 +472,14 @@ func (f *fakeWorker) stop() {
 func (c *cluster) addFakeWorker(id string) *fakeWorker {
 	c.t.Helper()
 	return c.addFakeWorkerOn(id, "ws://127.0.0.1:1/ws", nil)
+}
+
+func (c *cluster) addRestoreRejectingWorker(id string) *fakeWorker {
+	c.t.Helper()
+
+	f := c.addFakeWorkerOn(id, "ws://127.0.0.1:1/ws", nil)
+	f.rejectRestore = true
+	return f
 }
 
 func (c *cluster) addBlackHoleWorker(id string) *fakeWorker {
@@ -508,6 +571,60 @@ type testClient struct {
 	session string
 }
 
+func (c *cluster) distribution(clients []*testClient) map[string]int {
+	c.t.Helper()
+
+	counts := make(map[string]int)
+	for _, client := range clients {
+		counts[client.sendExpectingNext("where").worker]++
+	}
+	return counts
+}
+
+func (c *cluster) sessionsOn(clients []*testClient, workerID string) int {
+	c.t.Helper()
+
+	count := 0
+	for _, client := range clients {
+		data, err := c.store.Load(context.Background(), client.session)
+		if err != nil || data == nil {
+			continue
+		}
+		if data.WorkerID == workerID {
+			count++
+		}
+	}
+	return count
+}
+
+func (c *cluster) distributionAfterCrash(clients []*testClient) map[string]int {
+	c.t.Helper()
+
+	counts := make(map[string]int)
+	for _, client := range clients {
+		r := client.send("where")
+		client.last = r.count
+		counts[r.worker]++
+	}
+	return counts
+}
+
+func (c *cluster) reportDistribution(label string, counts map[string]int) {
+	c.t.Helper()
+
+	ids := make([]string, 0, len(counts))
+	for id := range counts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("%s=%d", id, counts[id]))
+	}
+	c.t.Logf("%s: %s", label, strings.Join(parts, " "))
+}
+
 func dialGateway(c *cluster) (*websocket.Conn, *http.Response, error) {
 	url := "ws" + strings.TrimPrefix(c.http.URL, "http") + "/ws"
 	return websocket.DefaultDialer.Dial(url, nil)
@@ -543,6 +660,11 @@ func (tc *testClient) send(msg string) reply {
 	r := parseReply(tc.t, string(data))
 	tc.session = r.sessionID
 	return r
+}
+
+func (tc *testClient) worker() string {
+	tc.t.Helper()
+	return tc.sendExpectingNext("where").worker
 }
 
 func (tc *testClient) sendExpectingNext(msg string) reply {
