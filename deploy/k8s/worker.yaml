@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ws-worker
+  labels:
+    app: ws-worker
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: ws-worker
+  template:
+    metadata:
+      labels:
+        app: ws-worker
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: worker
+          image: ws-migrator/worker:latest
+          ports:
+            - name: ws
+              containerPort: 8081
+            - name: grpc
+              containerPort: 9091
+          env:
+            - name: WORKER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: LISTEN_ADDR
+              value: ":8081"
+            - name: GRPC_ADDR
+              value: ":9091"
+            - name: WS_ADVERTISE
+              value: "ws://$(POD_IP):8081/ws"
+            - name: GRPC_ADVERTISE
+              value: "$(POD_IP):9091"
+            - name: GATEWAY_ADDR
+              value: ws-gateway:9090
+            - name: REDIS_ADDR
+              value: ws-redis:6379
+            - name: REGISTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ws-migrator
+                  key: register-token
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: ws
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ws-worker
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: ws-worker

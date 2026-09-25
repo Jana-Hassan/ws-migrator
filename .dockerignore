@@ -1,0 +1,12 @@
+.history/
+.git/
+.github/
+.gitignore
+.vscode/
+.idea/
+deploy/
+docker-compose.yml
+Dockerfile
+README.md
+*.md
+*.log
