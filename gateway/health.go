@@ -90,6 +90,7 @@ func (s *Server) reconcileMonitors(ctx context.Context, cfg HealthConfig) {
 				log.Printf("health: evicting %s after %s unhealthy", w.ID, cfg.EvictAfterUnhealthy)
 				s.pool.Remove(w.ID)
 				s.grpcClient.Invalidate(w.ID)
+				s.metrics.forgetWorker(w.ID)
 			}
 		}
 
@@ -149,10 +150,12 @@ func (s *Server) watchHealth(ctx context.Context, workerID string, cfg HealthCon
 
 	go func() {
 		for {
-			if _, err := stream.Recv(); err != nil {
+			update, err := stream.Recv()
+			if err != nil {
 				errs <- err
 				return
 			}
+			s.metrics.recordWorkerHealth(workerID, update.SnapshotFailures, update.SnapshotsWritten)
 			select {
 			case updates <- struct{}{}:
 			case <-ctx.Done():

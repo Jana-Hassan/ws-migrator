@@ -33,8 +33,11 @@ func (w *Worker) snapshotAll(ctx context.Context) {
 		}
 
 		if err := w.store.SaveSnapshot(ctx, s.id, state, appliedSeq); err != nil {
+			w.snapshotFailures.Add(1)
 			log.Printf("[worker-%s] snapshot %s failed: %v", w.id, s.id, err)
+			continue
 		}
+		w.snapshotsWritten.Add(1)
 	}
 }
 

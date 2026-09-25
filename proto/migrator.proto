@@ -78,6 +78,8 @@ message HealthUpdate {
   int32 session_count = 2;
   WorkerStatus status = 3;
   int64 unix_ms = 4;
+  uint64 snapshot_failures = 5;
+  uint64 snapshots_written = 6;
 }
 
 enum WorkerStatus {

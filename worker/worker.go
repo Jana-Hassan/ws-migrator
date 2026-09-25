@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -44,6 +45,8 @@ type Worker struct {
 	advertiseGRPC    string
 	draining         chan struct{}
 	drainOnce        sync.Once
+	snapshotFailures atomic.Uint64
+	snapshotsWritten atomic.Uint64
 	store            store.Store
 	sessions         *sessionRegistry
 	onMessage        func(sessionID string, state State, msg []byte) []byte
@@ -218,7 +221,7 @@ func (w *Worker) startGRPC() error {
 
 func (w *Worker) StartGRPCOn(lis net.Listener) error {
 	srv := grpc.NewServer()
-	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w.id, w.sessions, w.onCreate, w.healthInterval))
+	migratorpb.RegisterWorkerServiceServer(srv, newGRPCServer(w, w.sessions, w.onCreate, w.healthInterval))
 	return srv.Serve(lis)
 }
 

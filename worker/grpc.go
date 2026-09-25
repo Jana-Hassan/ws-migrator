@@ -13,15 +13,17 @@ import (
 
 type grpcServer struct {
 	migratorpb.UnimplementedWorkerServiceServer
+	worker         *Worker
 	sessions       *sessionRegistry
 	workerID       string
 	onCreate       func(sessionID string) State
 	healthInterval time.Duration
 }
 
-func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(sessionID string) State, healthInterval time.Duration) *grpcServer {
+func newGRPCServer(w *Worker, sessions *sessionRegistry, onCreate func(sessionID string) State, healthInterval time.Duration) *grpcServer {
 	return &grpcServer{
-		workerID:       workerID,
+		worker:         w,
+		workerID:       w.id,
 		sessions:       sessions,
 		onCreate:       onCreate,
 		healthInterval: healthInterval,
@@ -92,10 +94,12 @@ func (g *grpcServer) HealthStream(req *migratorpb.HealthStreamRequest, stream gr
 			return nil
 		case <-ticker.C:
 			err := stream.Send(&migratorpb.HealthUpdate{
-				WorkerId:     g.workerID,
-				SessionCount: int32(g.sessions.count()),
-				Status:       migratorpb.WorkerStatus_WORKER_STATUS_SERVING,
-				UnixMs:       time.Now().UnixMilli(),
+				WorkerId:         g.workerID,
+				SessionCount:     int32(g.sessions.count()),
+				Status:           migratorpb.WorkerStatus_WORKER_STATUS_SERVING,
+				UnixMs:           time.Now().UnixMilli(),
+				SnapshotFailures: g.worker.snapshotFailures.Load(),
+				SnapshotsWritten: g.worker.snapshotsWritten.Load(),
 			})
 			if err != nil {
 				return err

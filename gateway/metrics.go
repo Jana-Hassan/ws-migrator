@@ -1,6 +1,9 @@
 package gateway
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 type Metrics struct {
 	sessionsStarted   atomic.Uint64
@@ -20,6 +23,41 @@ type Metrics struct {
 	resendGaps  atomic.Uint64
 
 	snapshotWriteFailures atomic.Uint64
+
+	workerMu     sync.Mutex
+	workerReport map[string]workerHealth
+}
+
+type workerHealth struct {
+	snapshotFailures uint64
+	snapshotsWritten uint64
+}
+
+func (m *Metrics) recordWorkerHealth(workerID string, snapshotFailures, snapshotsWritten uint64) {
+	m.workerMu.Lock()
+	defer m.workerMu.Unlock()
+
+	if m.workerReport == nil {
+		m.workerReport = make(map[string]workerHealth)
+	}
+	m.workerReport[workerID] = workerHealth{snapshotFailures: snapshotFailures, snapshotsWritten: snapshotsWritten}
+}
+
+func (m *Metrics) forgetWorker(workerID string) {
+	m.workerMu.Lock()
+	defer m.workerMu.Unlock()
+	delete(m.workerReport, workerID)
+}
+
+func (m *Metrics) workerTotals() (failures, written uint64) {
+	m.workerMu.Lock()
+	defer m.workerMu.Unlock()
+
+	for _, report := range m.workerReport {
+		failures += report.snapshotFailures
+		written += report.snapshotsWritten
+	}
+	return failures, written
 }
 
 type Stats struct {
@@ -41,6 +79,9 @@ type Stats struct {
 	ResendGaps  uint64 `json:"resend_gaps"`
 
 	SnapshotWriteFailures uint64 `json:"snapshot_write_failures"`
+
+	WorkerSnapshotFailures uint64 `json:"worker_snapshot_failures"`
+	WorkerSnapshotsWritten uint64 `json:"worker_snapshots_written"`
 
 	WorkersTotal    int `json:"workers_total"`
 	WorkersHealthy  int `json:"workers_healthy"`
@@ -66,6 +107,8 @@ func (s *Server) Stats() Stats {
 		ResendGaps:            m.resendGaps.Load(),
 		SnapshotWriteFailures: m.snapshotWriteFailures.Load(),
 	}
+
+	stats.WorkerSnapshotFailures, stats.WorkerSnapshotsWritten = m.workerTotals()
 
 	for _, w := range s.pool.All() {
 		stats.WorkersTotal++

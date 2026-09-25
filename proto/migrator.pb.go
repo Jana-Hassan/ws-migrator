@@ -670,13 +670,15 @@ func (*HealthStreamRequest) Descriptor() ([]byte, []int) {
 }
 
 type HealthUpdate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	WorkerId      string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
-	SessionCount  int32                  `protobuf:"varint,2,opt,name=session_count,json=sessionCount,proto3" json:"session_count,omitempty"`
-	Status        WorkerStatus           `protobuf:"varint,3,opt,name=status,proto3,enum=migrator.v1.WorkerStatus" json:"status,omitempty"`
-	UnixMs        int64                  `protobuf:"varint,4,opt,name=unix_ms,json=unixMs,proto3" json:"unix_ms,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	WorkerId         string                 `protobuf:"bytes,1,opt,name=worker_id,json=workerId,proto3" json:"worker_id,omitempty"`
+	SessionCount     int32                  `protobuf:"varint,2,opt,name=session_count,json=sessionCount,proto3" json:"session_count,omitempty"`
+	Status           WorkerStatus           `protobuf:"varint,3,opt,name=status,proto3,enum=migrator.v1.WorkerStatus" json:"status,omitempty"`
+	UnixMs           int64                  `protobuf:"varint,4,opt,name=unix_ms,json=unixMs,proto3" json:"unix_ms,omitempty"`
+	SnapshotFailures uint64                 `protobuf:"varint,5,opt,name=snapshot_failures,json=snapshotFailures,proto3" json:"snapshot_failures,omitempty"`
+	SnapshotsWritten uint64                 `protobuf:"varint,6,opt,name=snapshots_written,json=snapshotsWritten,proto3" json:"snapshots_written,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *HealthUpdate) Reset() {
@@ -737,6 +739,20 @@ func (x *HealthUpdate) GetUnixMs() int64 {
 	return 0
 }
 
+func (x *HealthUpdate) GetSnapshotFailures() uint64 {
+	if x != nil {
+		return x.SnapshotFailures
+	}
+	return 0
+}
+
+func (x *HealthUpdate) GetSnapshotsWritten() uint64 {
+	if x != nil {
+		return x.SnapshotsWritten
+	}
+	return 0
+}
+
 var File_proto_migrator_proto protoreflect.FileDescriptor
 
 const file_proto_migrator_proto_rawDesc = "" +
@@ -782,12 +798,14 @@ const file_proto_migrator_proto_rawDesc = "" +
 	"\rDrainResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12#\n" +
 	"\rsession_count\x18\x02 \x01(\x05R\fsessionCount\"\x15\n" +
-	"\x13HealthStreamRequest\"\x9c\x01\n" +
+	"\x13HealthStreamRequest\"\xf6\x01\n" +
 	"\fHealthUpdate\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12#\n" +
 	"\rsession_count\x18\x02 \x01(\x05R\fsessionCount\x121\n" +
 	"\x06status\x18\x03 \x01(\x0e2\x19.migrator.v1.WorkerStatusR\x06status\x12\x17\n" +
-	"\aunix_ms\x18\x04 \x01(\x03R\x06unixMs*\x80\x01\n" +
+	"\aunix_ms\x18\x04 \x01(\x03R\x06unixMs\x12+\n" +
+	"\x11snapshot_failures\x18\x05 \x01(\x04R\x10snapshotFailures\x12+\n" +
+	"\x11snapshots_written\x18\x06 \x01(\x04R\x10snapshotsWritten*\x80\x01\n" +
 	"\fWorkerStatus\x12\x1d\n" +
 	"\x19WORKER_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15WORKER_STATUS_SERVING\x10\x01\x12\x1a\n" +

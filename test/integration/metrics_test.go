@@ -89,6 +89,29 @@ func TestStatsCountRecoveryAndResends(t *testing.T) {
 	}
 }
 
+func TestStatsReportWorkerSnapshotCounters(t *testing.T) {
+	c := newCluster(t, 1)
+	c.startHealth()
+
+	client := c.connect()
+	client.sendExpectingNext("hello")
+
+	waitFor(t, "worker snapshots reported", func() bool {
+		return c.stats().WorkerSnapshotsWritten >= 1
+	})
+
+	if c.stats().WorkerSnapshotFailures != 0 {
+		t.Fatalf("unexpected snapshot failures: %d", c.stats().WorkerSnapshotFailures)
+	}
+
+	c.redis.Close()
+	client.sendExpectingNext("after-redis-down")
+
+	waitFor(t, "worker snapshot failures reported", func() bool {
+		return c.stats().WorkerSnapshotFailures >= 1
+	})
+}
+
 func TestStatsCountRejectedSessions(t *testing.T) {
 	c := newEmptyCluster(t)
 
