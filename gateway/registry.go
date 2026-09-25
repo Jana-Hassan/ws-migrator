@@ -17,10 +17,15 @@ type Session struct {
 	WorkerConn     *websocket.Conn
 	ConnectedAt    time.Time
 	mu             sync.Mutex
-	migrateChannel chan string
+	migrateChannel chan migrateRequest
 
 	seq      uint64
 	outbound []bufferedMessage
+}
+
+type migrateRequest struct {
+	target   string
+	fallback bool
 }
 
 type bufferedMessage struct {
@@ -67,11 +72,13 @@ func (s *Session) outboundAfter(appliedSeq uint64) ([]bufferedMessage, bool) {
 type Registry struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	onWorker map[string]int
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		sessions: make(map[string]*Session),
+		onWorker: make(map[string]int),
 	}
 }
 
@@ -82,14 +89,29 @@ func NewSessionID() string {
 func (r *Registry) Add(session *Session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if existing, ok := r.sessions[session.ID]; ok {
+		r.onWorker[existing.WorkerID]--
+	}
+
 	r.sessions[session.ID] = session
+	r.onWorker[session.WorkerID]++
 }
 
 // deletes a session when client disconnects
 func (r *Registry) Remove(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	session, ok := r.sessions[id]
+	if !ok {
+		return
+	}
+
 	delete(r.sessions, id)
+	if r.onWorker[session.WorkerID]--; r.onWorker[session.WorkerID] <= 0 {
+		delete(r.onWorker, session.WorkerID)
+	}
 }
 
 // gets session by id
@@ -114,6 +136,13 @@ func (r *Registry) AllOnWorker(workerID string) []*Session {
 	return result
 }
 
+// counts sessions on a worker without scanning every session
+func (r *Registry) CountOnWorker(workerID string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.onWorker[workerID]
+}
+
 // returns total # active sessions
 func (r *Registry) Count() int {
 	r.mu.RLock()
@@ -124,7 +153,15 @@ func (r *Registry) Count() int {
 func (r *Registry) UpdateWorker(sessionID, workerID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if s, ok := r.sessions[sessionID]; ok {
-		s.WorkerID = workerID
+
+	s, ok := r.sessions[sessionID]
+	if !ok || s.WorkerID == workerID {
+		return
 	}
+
+	if r.onWorker[s.WorkerID]--; r.onWorker[s.WorkerID] <= 0 {
+		delete(r.onWorker, s.WorkerID)
+	}
+	r.onWorker[workerID]++
+	s.WorkerID = workerID
 }

@@ -87,9 +87,11 @@ func (g *grpcServer) Drain(ctx context.Context, req *migratorpb.DrainRequest) (*
 	sessions := g.server.registry.AllOnWorker(req.WorkerId)
 	log.Printf("drain requested for %s (%s): %d sessions", req.WorkerId, req.Reason, len(sessions))
 
+	targets := g.server.newLoadTracker(req.WorkerId)
+
 	accepted := true
 	for _, session := range sessions {
-		target, ok := g.server.pickWorker(req.WorkerId)
+		target, ok := targets.next()
 		if !ok {
 			log.Printf("drain: no target available for session %s", session.ID)
 			accepted = false
@@ -97,7 +99,7 @@ func (g *grpcServer) Drain(ctx context.Context, req *migratorpb.DrainRequest) (*
 		}
 
 		select {
-		case session.migrateChannel <- target.ID:
+		case session.migrateChannel <- migrateRequest{target: target.ID, fallback: true}:
 		default:
 		}
 	}

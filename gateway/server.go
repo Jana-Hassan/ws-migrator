@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/Jana-Hassan/ws-migrator/internal/frame"
@@ -14,7 +15,8 @@ import (
 )
 
 const (
-	outboundBufferSize = 1024
+	outboundBufferSize      = 1024
+	migrateFallbackAttempts = 2
 
 	pongWait   = 60 * time.Second
 	pingPeriod = 50 * time.Second
@@ -122,7 +124,7 @@ func (s *Server) Handler() http.Handler {
 		}
 
 		select {
-		case session.migrateChannel <- targetWorker:
+		case session.migrateChannel <- migrateRequest{target: targetWorker}:
 			fmt.Fprintf(w, "migration triggered for %s to %s\n", sessionID, targetWorker)
 		default:
 			http.Error(w, "migration already in progress", http.StatusConflict)
@@ -139,7 +141,7 @@ func (s *Server) startSession(id, workerID string, clientConn, workerConn *webso
 		ClientConn:     clientConn,
 		WorkerConn:     workerConn,
 		ConnectedAt:    time.Now(),
-		migrateChannel: make(chan string, 1),
+		migrateChannel: make(chan migrateRequest, 1),
 	}
 	s.registry.Add(session)
 	s.metrics.sessionsStarted.Add(1)
@@ -226,15 +228,19 @@ func (s *Server) HandleClient(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) pickWorker(exclude string) (WorkerInfo, bool) {
+	return s.pickWorkerExcept(map[string]bool{exclude: true})
+}
+
+func (s *Server) pickWorkerExcept(exclude map[string]bool) (WorkerInfo, bool) {
 	var best WorkerInfo
 	found := false
 	minSessions := -1
 
 	for _, w := range s.pool.All() {
-		if w.Draining || !w.Healthy || w.ID == exclude {
+		if w.Draining || !w.Healthy || exclude[w.ID] {
 			continue
 		}
-		count := len(s.registry.AllOnWorker(w.ID))
+		count := s.registry.CountOnWorker(w.ID)
 		if minSessions == -1 || count < minSessions {
 			minSessions = count
 			best = w
@@ -243,6 +249,47 @@ func (s *Server) pickWorker(exclude string) (WorkerInfo, bool) {
 	}
 
 	return best, found
+}
+
+type loadTracker struct {
+	counts map[string]int
+	ids    []string
+	byID   map[string]WorkerInfo
+}
+
+func (s *Server) newLoadTracker(exclude string) *loadTracker {
+	lt := &loadTracker{
+		counts: make(map[string]int),
+		byID:   make(map[string]WorkerInfo),
+	}
+
+	for _, w := range s.pool.All() {
+		if w.Draining || !w.Healthy || w.ID == exclude {
+			continue
+		}
+		lt.ids = append(lt.ids, w.ID)
+		lt.byID[w.ID] = w
+		lt.counts[w.ID] = s.registry.CountOnWorker(w.ID)
+	}
+
+	sort.Strings(lt.ids)
+	return lt
+}
+
+func (lt *loadTracker) next() (WorkerInfo, bool) {
+	best, lowest := "", -1
+	for _, id := range lt.ids {
+		if lowest == -1 || lt.counts[id] < lowest {
+			best, lowest = id, lt.counts[id]
+		}
+	}
+
+	if best == "" {
+		return WorkerInfo{}, false
+	}
+
+	lt.counts[best]++
+	return lt.byID[best], true
 }
 
 type clientMessage struct {
@@ -335,8 +382,8 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 			workerConn.Close()
 			return s.recoverSession(session)
 
-		case targetWorkerID := <-session.migrateChannel:
-			if !s.migrate(session, targetWorkerID) {
+		case req := <-session.migrateChannel:
+			if !s.migrateWithFallback(session, req) {
 				continue
 			}
 			workerConn.Close()
@@ -369,6 +416,35 @@ func (s *Server) pipeMessages(src, dst *websocket.Conn, direction string) {
 
 		log.Printf("%s: forwarded %d bytes", direction, len(message))
 	}
+}
+
+func (s *Server) migrateWithFallback(session *Session, req migrateRequest) bool {
+	if s.migrate(session, req.target) {
+		return true
+	}
+	if !req.fallback {
+		return false
+	}
+
+	session.mu.Lock()
+	current := session.WorkerID
+	session.mu.Unlock()
+
+	tried := map[string]bool{req.target: true, current: true}
+	for attempt := 0; attempt < migrateFallbackAttempts; attempt++ {
+		target, ok := s.pickWorkerExcept(tried)
+		if !ok {
+			return false
+		}
+
+		tried[target.ID] = true
+		log.Printf("session %s: retrying drain migration on %s", session.ID, target.ID)
+		if s.migrate(session, target.ID) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (s *Server) migrate(session *Session, targetWorkerID string) bool {
