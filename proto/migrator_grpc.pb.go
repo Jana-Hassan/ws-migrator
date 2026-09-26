@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	WorkerService_Checkpoint_FullMethodName   = "/migrator.v1.WorkerService/Checkpoint"
 	WorkerService_Restore_FullMethodName      = "/migrator.v1.WorkerService/Restore"
+	WorkerService_Resume_FullMethodName       = "/migrator.v1.WorkerService/Resume"
 	WorkerService_HealthStream_FullMethodName = "/migrator.v1.WorkerService/HealthStream"
 )
 
@@ -30,6 +31,7 @@ const (
 type WorkerServiceClient interface {
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
+	Resume(ctx context.Context, in *ResumeRequest, opts ...grpc.CallOption) (*ResumeResponse, error)
 	HealthStream(ctx context.Context, in *HealthStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[HealthUpdate], error)
 }
 
@@ -61,6 +63,16 @@ func (c *workerServiceClient) Restore(ctx context.Context, in *RestoreRequest, o
 	return out, nil
 }
 
+func (c *workerServiceClient) Resume(ctx context.Context, in *ResumeRequest, opts ...grpc.CallOption) (*ResumeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResumeResponse)
+	err := c.cc.Invoke(ctx, WorkerService_Resume_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *workerServiceClient) HealthStream(ctx context.Context, in *HealthStreamRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[HealthUpdate], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &WorkerService_ServiceDesc.Streams[0], WorkerService_HealthStream_FullMethodName, cOpts...)
@@ -86,6 +98,7 @@ type WorkerService_HealthStreamClient = grpc.ServerStreamingClient[HealthUpdate]
 type WorkerServiceServer interface {
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
+	Resume(context.Context, *ResumeRequest) (*ResumeResponse, error)
 	HealthStream(*HealthStreamRequest, grpc.ServerStreamingServer[HealthUpdate]) error
 	mustEmbedUnimplementedWorkerServiceServer()
 }
@@ -102,6 +115,9 @@ func (UnimplementedWorkerServiceServer) Checkpoint(context.Context, *CheckpointR
 }
 func (UnimplementedWorkerServiceServer) Restore(context.Context, *RestoreRequest) (*RestoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Restore not implemented")
+}
+func (UnimplementedWorkerServiceServer) Resume(context.Context, *ResumeRequest) (*ResumeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Resume not implemented")
 }
 func (UnimplementedWorkerServiceServer) HealthStream(*HealthStreamRequest, grpc.ServerStreamingServer[HealthUpdate]) error {
 	return status.Error(codes.Unimplemented, "method HealthStream not implemented")
@@ -163,6 +179,24 @@ func _WorkerService_Restore_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WorkerService_Resume_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResumeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WorkerServiceServer).Resume(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WorkerService_Resume_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WorkerServiceServer).Resume(ctx, req.(*ResumeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WorkerService_HealthStream_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(HealthStreamRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -188,6 +222,10 @@ var WorkerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Restore",
 			Handler:    _WorkerService_Restore_Handler,
+		},
+		{
+			MethodName: "Resume",
+			Handler:    _WorkerService_Resume_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

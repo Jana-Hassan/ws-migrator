@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jana-Hassan/ws-migrator/internal/frame"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
@@ -21,6 +22,34 @@ type Session struct {
 
 	seq      uint64
 	outbound []bufferedMessage
+
+	lastReply uint64
+	lastPush  uint64
+}
+
+func (s *Session) watermarks() (reply, push uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastReply, s.lastPush
+}
+
+func (s *Session) admitDownlink(kind byte, key uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	switch kind {
+	case frame.Reply:
+		if key <= s.lastReply {
+			return false
+		}
+		s.lastReply = key
+	case frame.Push:
+		if key <= s.lastPush {
+			return false
+		}
+		s.lastPush = key
+	}
+	return true
 }
 
 type migrateRequest struct {
@@ -47,6 +76,16 @@ func (s *Session) bufferOutbound(messageType int, data []byte) bufferedMessage {
 	}
 
 	return msg
+}
+
+func (s *Session) resumeAfter(appliedSeq uint64) uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.outbound) > 0 && s.outbound[0].seq > appliedSeq+1 {
+		return s.outbound[0].seq - 1
+	}
+	return appliedSeq
 }
 
 func (s *Session) outboundAfter(appliedSeq uint64) ([]bufferedMessage, bool) {

@@ -9,6 +9,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const readClientFrame = "gateway.(*Server).readClient"
+
 func stackDump() string {
 	buf := make([]byte, 1<<20)
 	for {
@@ -42,15 +44,13 @@ func TestNoGoroutineLeakWhenSessionsDieMidMessage(t *testing.T) {
 	c := newCluster(t, 1)
 
 	const sessions = 30
-	const readClient = "gateway.(*Server).readClient"
-
 	clients := make([]*testClient, sessions)
 	for i := range clients {
 		clients[i] = c.connect()
 		clients[i].sendExpectingNext("hello")
 	}
 
-	if n := countGoroutines(readClient); n != sessions {
+	if n := countGoroutines(readClientFrame); n != sessions {
 		t.Fatalf("expected %d reader goroutines while sessions are live, found %d", sessions, n)
 	}
 
@@ -79,5 +79,5 @@ func TestNoGoroutineLeakWhenSessionsDieMidMessage(t *testing.T) {
 		client.conn.Close()
 	}
 
-	waitForGoroutines(t, readClient, 0)
+	waitForGoroutines(t, readClientFrame, 0)
 }

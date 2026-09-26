@@ -57,7 +57,7 @@ func (c *GRPCClient) connect(workerID string) (migratorpb.WorkerServiceClient, e
 	return migratorpb.NewWorkerServiceClient(conn), nil
 }
 
-func (c *GRPCClient) Checkpoint(ctx context.Context, workerID, sessionID string) (*migratorpb.CheckpointResponse, error) {
+func (c *GRPCClient) Checkpoint(ctx context.Context, workerID, sessionID string, freeze bool) (*migratorpb.CheckpointResponse, error) {
 	client, err := c.connect(workerID)
 	if err != nil {
 		return nil, err
@@ -68,10 +68,23 @@ func (c *GRPCClient) Checkpoint(ctx context.Context, workerID, sessionID string)
 
 	return client.Checkpoint(ctx, &migratorpb.CheckpointRequest{
 		SessionId: sessionID,
+		Freeze:    freeze,
 	})
 }
 
-func (c *GRPCClient) Restore(ctx context.Context, workerID, sessionID string, state []byte, appliedSeq uint64) (*migratorpb.RestoreResponse, error) {
+func (c *GRPCClient) Resume(ctx context.Context, workerID, sessionID string) (*migratorpb.ResumeResponse, error) {
+	client, err := c.connect(workerID)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	return client.Resume(ctx, &migratorpb.ResumeRequest{SessionId: sessionID})
+}
+
+func (c *GRPCClient) Restore(ctx context.Context, workerID, sessionID string, state []byte, appliedSeq uint64, outbox []byte) (*migratorpb.RestoreResponse, error) {
 	client, err := c.connect(workerID)
 	if err != nil {
 		return nil, err
@@ -84,6 +97,7 @@ func (c *GRPCClient) Restore(ctx context.Context, workerID, sessionID string, st
 		SessionId:  sessionID,
 		State:      state,
 		AppliedSeq: appliedSeq,
+		Outbox:     outbox,
 	})
 }
 

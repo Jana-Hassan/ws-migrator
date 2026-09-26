@@ -16,6 +16,7 @@ import (
 
 const (
 	outboundBufferSize      = 1024
+	ackInterval             = 20 * time.Millisecond
 	migrateFallbackAttempts = 2
 
 	pongWait   = 60 * time.Second
@@ -100,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
-		resp, err := s.grpcClient.Checkpoint(r.Context(), session.WorkerID, sessionID)
+		resp, err := s.grpcClient.Checkpoint(r.Context(), session.WorkerID, sessionID, false)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("checkpoint failed: %v", err), http.StatusInternalServerError)
 			return
@@ -354,12 +355,27 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 
 	workerDone := make(chan struct{})
 	go func() {
-		s.pipeMessages(workerConn, session.ClientConn, "worker→client")
+		s.pipeDownlink(session, workerConn)
 		close(workerDone)
 	}()
 
+	acks := time.NewTicker(ackInterval)
+	defer acks.Stop()
+	var ackedReply, ackedPush uint64
+
 	for {
 		select {
+		case <-acks.C:
+			reply, push := session.watermarks()
+			if reply == ackedReply && push == ackedPush {
+				continue
+			}
+			if err := workerConn.WriteMessage(websocket.BinaryMessage, frame.EncodeAck(reply, push)); err != nil {
+				log.Printf("session %s: ack to worker failed: %v", session.ID, err)
+				continue
+			}
+			ackedReply, ackedPush = reply, push
+
 		case msg, ok := <-clientMessages:
 			if !ok {
 				workerConn.Close()
@@ -368,7 +384,7 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 			}
 
 			buffered := session.bufferOutbound(msg.messageType, msg.data)
-			if err := workerConn.WriteMessage(buffered.messageType, frame.Encode(buffered.seq, buffered.data)); err == nil {
+			if err := workerConn.WriteMessage(buffered.messageType, frame.EncodeUp(frame.Message, buffered.seq, buffered.data)); err == nil {
 				s.metrics.messagesForwarded.Add(1)
 			} else {
 				log.Printf("session %s: write to worker failed: %v", session.ID, err)
@@ -383,7 +399,7 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 			return s.recoverSession(session)
 
 		case req := <-session.migrateChannel:
-			if !s.migrateWithFallback(session, req) {
+			if !s.migrateWithFallback(session, req, workerConn) {
 				continue
 			}
 			workerConn.Close()
@@ -393,32 +409,40 @@ func (s *Server) runOnWorker(cancel context.CancelFunc, session *Session, worker
 	}
 }
 
-func (s *Server) pipeMessages(src, dst *websocket.Conn, direction string) {
-	src.SetReadDeadline(time.Now().Add(pongWait))
-	src.SetPongHandler(func(string) error {
-		return src.SetReadDeadline(time.Now().Add(pongWait))
+func (s *Server) pipeDownlink(session *Session, workerConn *websocket.Conn) {
+	workerConn.SetReadDeadline(time.Now().Add(pongWait))
+	workerConn.SetPongHandler(func(string) error {
+		return workerConn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
-		messageType, message, err := src.ReadMessage()
+		messageType, message, err := workerConn.ReadMessage()
 		if err != nil {
-			log.Printf("%s: read stopped: %v", direction, err)
+			log.Printf("worker→client: read stopped: %v", err)
 			return
 		}
 
-		src.SetReadDeadline(time.Now().Add(pongWait))
+		workerConn.SetReadDeadline(time.Now().Add(pongWait))
 
-		err = dst.WriteMessage(messageType, message)
-		if err != nil {
-			log.Printf("%s: write error: %v", direction, err)
-			return
+		kind, key, payload, ok := frame.DecodeDown(message)
+		if !ok {
+			log.Printf("session %s: malformed frame from worker, dropped", session.ID)
+			continue
 		}
 
-		log.Printf("%s: forwarded %d bytes", direction, len(message))
+		if !session.admitDownlink(kind, key) {
+			s.metrics.duplicatesDropped.Add(1)
+			continue
+		}
+
+		if err := session.ClientConn.WriteMessage(messageType, payload); err != nil {
+			log.Printf("worker→client: write error: %v", err)
+			return
+		}
 	}
 }
 
-func (s *Server) migrateWithFallback(session *Session, req migrateRequest) bool {
+func (s *Server) migrateWithFallback(session *Session, req migrateRequest, sourceConn *websocket.Conn) bool {
 	session.mu.Lock()
 	placed := session.WorkerID
 	session.mu.Unlock()
@@ -427,7 +451,7 @@ func (s *Server) migrateWithFallback(session *Session, req migrateRequest) bool 
 		return false
 	}
 
-	if s.migrate(session, req.target) {
+	if s.migrate(session, req.target, sourceConn) {
 		return true
 	}
 	if !req.fallback {
@@ -447,7 +471,7 @@ func (s *Server) migrateWithFallback(session *Session, req migrateRequest) bool 
 
 		tried[target.ID] = true
 		log.Printf("session %s: retrying drain migration on %s", session.ID, target.ID)
-		if s.migrate(session, target.ID) {
+		if s.migrate(session, target.ID, sourceConn) {
 			return true
 		}
 	}
@@ -455,10 +479,10 @@ func (s *Server) migrateWithFallback(session *Session, req migrateRequest) bool 
 	return false
 }
 
-func (s *Server) migrate(session *Session, targetWorkerID string) bool {
+func (s *Server) migrate(session *Session, targetWorkerID string, sourceConn *websocket.Conn) bool {
 	s.metrics.migrationsAttempted.Add(1)
 
-	ok := s.doMigrate(session, targetWorkerID)
+	ok := s.doMigrate(session, targetWorkerID, sourceConn)
 	if ok {
 		s.metrics.migrationsSucceeded.Add(1)
 	} else {
@@ -467,7 +491,7 @@ func (s *Server) migrate(session *Session, targetWorkerID string) bool {
 	return ok
 }
 
-func (s *Server) doMigrate(session *Session, targetWorkerID string) bool {
+func (s *Server) doMigrate(session *Session, targetWorkerID string, sourceConn *websocket.Conn) bool {
 	log.Printf("migrating session %s from %s to %s", session.ID, session.WorkerID, targetWorkerID)
 	if targetWorkerID == session.WorkerID {
 		log.Printf("migration failed: session %s already on %s", session.ID, targetWorkerID)
@@ -489,21 +513,28 @@ func (s *Server) doMigrate(session *Session, targetWorkerID string) bool {
 	s.saveSession(ctx, session, "migrating")
 	defer s.saveSession(ctx, session, "active")
 
-	resp, err := s.grpcClient.Checkpoint(ctx, session.WorkerID, session.ID)
+	source := session.WorkerID
+
+	resp, err := s.grpcClient.Checkpoint(ctx, source, session.ID, true)
 	if err != nil {
 		log.Printf("migration failed: checkpoint error: %v", err)
+		s.unfreeze(ctx, session, source, sourceConn, 0, true)
 		return false
 	}
 	if !resp.Ok {
 		log.Printf("migration failed: checkpoint not ok: %s", resp.Error)
+		s.unfreeze(ctx, session, source, sourceConn, resp.AppliedSeq, true)
 		return false
 	}
 
-	if !s.placeOnWorker(ctx, session, target, resp.State, resp.AppliedSeq) {
+	checkpoint := store.Snapshot{State: resp.State, AppliedSeq: resp.AppliedSeq, Outbox: resp.Outbox}
+
+	if !s.placeOnWorker(ctx, session, target, checkpoint) {
+		s.unfreeze(ctx, session, source, sourceConn, resp.AppliedSeq, true)
 		return false
 	}
 
-	if err := s.store.SaveSnapshot(ctx, session.ID, resp.State, resp.AppliedSeq); err != nil {
+	if err := s.store.SaveSnapshot(ctx, session.ID, checkpoint); err != nil {
 		s.metrics.snapshotWriteFailures.Add(1)
 		log.Printf("warning: could not snapshot session %s after migration: %v", session.ID, err)
 	}
@@ -512,8 +543,26 @@ func (s *Server) doMigrate(session *Session, targetWorkerID string) bool {
 	return true
 }
 
-func (s *Server) placeOnWorker(ctx context.Context, session *Session, target WorkerInfo, state []byte, appliedSeq uint64) bool {
-	restored, err := s.grpcClient.Restore(ctx, target.ID, session.ID, state, appliedSeq)
+func (s *Server) unfreeze(ctx context.Context, session *Session, source string, sourceConn *websocket.Conn, appliedSeq uint64, resend bool) {
+	if _, err := s.grpcClient.Resume(ctx, source, session.ID); err != nil {
+		log.Printf("session %s: could not resume on %s: %v", session.ID, source, err)
+		return
+	}
+	if resend {
+		s.resendPending(session, sourceConn, appliedSeq)
+	}
+}
+
+func (s *Server) placeOnWorker(ctx context.Context, session *Session, target WorkerInfo, snap store.Snapshot) bool {
+	appliedSeq := snap.AppliedSeq
+	resumeSeq := session.resumeAfter(appliedSeq)
+	if resumeSeq != appliedSeq {
+		s.metrics.resendGaps.Add(1)
+		log.Printf("session %s: messages %d-%d fell out of the buffer and are lost", session.ID, appliedSeq+1, resumeSeq)
+		appliedSeq = resumeSeq
+	}
+
+	restored, err := s.grpcClient.Restore(ctx, target.ID, session.ID, snap.State, appliedSeq, snap.Outbox)
 	if err != nil {
 		log.Printf("placement failed: restore error: %v", err)
 		return false
@@ -523,7 +572,7 @@ func (s *Server) placeOnWorker(ctx context.Context, session *Session, target Wor
 		return false
 	}
 
-	workerURL := target.WSAddr + "?session_id=" + session.ID
+	workerURL := target.WSAddr + "?session_id=" + session.ID + "&resumed=1"
 	workerConn, _, err := websocket.DefaultDialer.Dial(workerURL, nil)
 	if err != nil {
 		log.Printf("placement failed: could not dial %s: %v", target.ID, err)
@@ -532,14 +581,18 @@ func (s *Server) placeOnWorker(ctx context.Context, session *Session, target Wor
 
 	workerConn.SetReadLimit(512 * 1024)
 
+	if !s.resendPending(session, workerConn, appliedSeq) {
+		workerConn.Close()
+		return false
+	}
+
 	session.mu.Lock()
 	session.WorkerConn = workerConn
 	session.WorkerID = target.ID
 	session.mu.Unlock()
 
 	s.registry.UpdateWorker(session.ID, target.ID)
-
-	return s.resendPending(session, workerConn, appliedSeq)
+	return true
 }
 
 func (s *Server) resendPending(session *Session, workerConn *websocket.Conn, appliedSeq uint64) bool {
@@ -550,7 +603,7 @@ func (s *Server) resendPending(session *Session, workerConn *websocket.Conn, app
 	}
 
 	for _, msg := range pending {
-		if err := workerConn.WriteMessage(msg.messageType, frame.Encode(msg.seq, msg.data)); err != nil {
+		if err := workerConn.WriteMessage(msg.messageType, frame.EncodeUp(frame.Message, msg.seq, msg.data)); err != nil {
 			log.Printf("session %s: resend of seq %d failed: %v", session.ID, msg.seq, err)
 			return false
 		}
@@ -588,15 +641,19 @@ func (s *Server) doRecoverSession(session *Session) bool {
 		return false
 	}
 
-	state, appliedSeq, err := s.store.LoadSnapshot(ctx, session.ID)
+	snap, err := s.store.LoadSnapshot(ctx, session.ID)
 	if err != nil {
 		log.Printf("recovery failed: could not load snapshot for %s: %v", session.ID, err)
 		return false
 	}
+	if snap == nil {
+		snap = &store.Snapshot{}
+	}
 
-	log.Printf("recovering session %s from %s onto %s (%d state bytes, applied seq %d)", session.ID, deadWorker, target.ID, len(state), appliedSeq)
+	log.Printf("recovering session %s from %s onto %s (%d state bytes, applied seq %d, %d outbox bytes)",
+		session.ID, deadWorker, target.ID, len(snap.State), snap.AppliedSeq, len(snap.Outbox))
 
-	if !s.placeOnWorker(ctx, session, target, state, appliedSeq) {
+	if !s.placeOnWorker(ctx, session, target, *snap) {
 		return false
 	}
 

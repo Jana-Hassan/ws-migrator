@@ -7,23 +7,23 @@ import (
 
 func TestStagedStateIsTakenOnce(t *testing.T) {
 	r := newSessionRegistry()
-	r.stage("sess-1", &testState{}, 7)
+	r.stage("sess-1", &testState{}, 7, nil)
 
-	state, appliedSeq, ok := r.take("sess-1")
-	if !ok || state == nil {
+	staged, ok := r.take("sess-1")
+	if !ok || staged.state == nil {
 		t.Fatal("staged state was not returned")
 	}
-	if appliedSeq != 7 {
-		t.Fatalf("applied seq %d, wanted 7", appliedSeq)
+	if staged.appliedSeq != 7 {
+		t.Fatalf("applied seq %d, wanted 7", staged.appliedSeq)
 	}
-	if _, _, ok := r.take("sess-1"); ok {
+	if _, ok := r.take("sess-1"); ok {
 		t.Fatal("staged state was returned twice")
 	}
 }
 
 func TestStagedStateExpires(t *testing.T) {
 	r := newSessionRegistry()
-	r.stage("sess-1", &testState{}, 7)
+	r.stage("sess-1", &testState{}, 7, nil)
 
 	if dropped := r.sweepPending(time.Hour); len(dropped) != 0 {
 		t.Fatalf("swept %v before the TTL", dropped)
@@ -35,7 +35,7 @@ func TestStagedStateExpires(t *testing.T) {
 	if len(dropped) != 1 || dropped[0] != "sess-1" {
 		t.Fatalf("sweep returned %v, wanted [sess-1]", dropped)
 	}
-	if _, _, ok := r.take("sess-1"); ok {
+	if _, ok := r.take("sess-1"); ok {
 		t.Fatal("expired state is still staged")
 	}
 }

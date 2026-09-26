@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jana-Hassan/ws-migrator/internal/frame"
 	"github.com/gorilla/websocket"
 )
 
@@ -20,7 +21,23 @@ type session struct {
 	conn       *websocket.Conn
 	state      State
 	dirty      bool
+	frozen     bool
 	appliedSeq uint64
+	outbox     []outFrame
+}
+
+func (s *session) emit(f outFrame) error {
+	s.outbox = append(s.outbox, f)
+	return s.write(int(f.messageType), frame.EncodeDown(f.kind, f.key, f.payload))
+}
+
+func (s *session) flushOutbox() error {
+	for _, f := range s.outbox {
+		if err := s.write(int(f.messageType), frame.EncodeDown(f.kind, f.key, f.payload)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *session) write(messageType int, data []byte) error {
@@ -41,6 +58,7 @@ type pendingState struct {
 	state      State
 	stagedAt   time.Time
 	appliedSeq uint64
+	outbox     []outFrame
 }
 
 func newSessionRegistry() *sessionRegistry {
@@ -50,10 +68,10 @@ func newSessionRegistry() *sessionRegistry {
 	}
 }
 
-func (r *sessionRegistry) stage(id string, state State, appliedSeq uint64) {
+func (r *sessionRegistry) stage(id string, state State, appliedSeq uint64, outbox []outFrame) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.pending[id] = pendingState{state: state, stagedAt: time.Now(), appliedSeq: appliedSeq}
+	r.pending[id] = pendingState{state: state, stagedAt: time.Now(), appliedSeq: appliedSeq, outbox: outbox}
 }
 
 func (r *sessionRegistry) sweepPending(ttl time.Duration) []string {
@@ -70,12 +88,12 @@ func (r *sessionRegistry) sweepPending(ttl time.Duration) []string {
 	return dropped
 }
 
-func (r *sessionRegistry) take(id string) (State, uint64, bool) {
+func (r *sessionRegistry) take(id string) (pendingState, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p, ok := r.pending[id]
 	delete(r.pending, id)
-	return p.state, p.appliedSeq, ok
+	return p, ok
 }
 
 func (r *sessionRegistry) add(s *session) error {

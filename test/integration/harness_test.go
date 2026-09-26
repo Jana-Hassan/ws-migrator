@@ -135,8 +135,10 @@ type cluster struct {
 	redis       *miniredis.Miniredis
 	store       store.Store
 
-	token        string
-	drainTimeout time.Duration
+	token            string
+	drainTimeout     time.Duration
+	snapshotInterval time.Duration
+	configureWorker  func(id string, w *worker.Worker)
 
 	endsMu sync.Mutex
 	ends   []sessionEnd
@@ -184,11 +186,11 @@ func (c *cluster) waitForSessionOff(sessionID, deadWorker string) string {
 func (c *cluster) snapshot(sessionID string) (string, bool) {
 	c.t.Helper()
 
-	state, _, err := c.store.LoadSnapshot(context.Background(), sessionID)
-	if err != nil || state == nil {
+	snap, err := c.store.LoadSnapshot(context.Background(), sessionID)
+	if err != nil || snap == nil {
 		return "", false
 	}
-	return string(state), true
+	return string(snap.State), true
 }
 
 func (c *cluster) dropSnapshot(sessionID string) {
@@ -233,7 +235,7 @@ func newClusterOn(t *testing.T, workerCount int, onCreate func(string) worker.St
 	httpSrv := httptest.NewServer(gw.Handler())
 	t.Cleanup(httpSrv.Close)
 
-	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis, store: backing, drainTimeout: testDrainTimeout}
+	c := &cluster{t: t, gateway: gw, http: httpSrv, pool: pool, gatewayAddr: gwLis.Addr().String(), redis: redis, store: backing, drainTimeout: testDrainTimeout, snapshotInterval: testSnapshotInterval}
 
 	for i := 1; i <= workerCount; i++ {
 		c.addWorker(fmt.Sprintf("worker-%d", i), onCreate, testHealthInterval)
@@ -327,17 +329,18 @@ func (c *cluster) buildWorker(id string, onCreate func(string) worker.State, hea
 	wsURL := "ws://" + wsLis.Addr().String() + "/ws"
 
 	w := worker.NewWorker(worker.Config{
-		ID:               id,
-		GatewayAddr:      c.gatewayAddr,
-		DrainTimeout:     c.drainTimeout,
-		HealthInterval:   healthInterval,
-		SnapshotInterval: testSnapshotInterval,
-		RegisterInterval: testRegisterInterval,
-		RegisterToken:    c.token,
-		AdvertiseWS:      wsURL,
-		AdvertiseGRPC:    grpcLis.Addr().String(),
-		PendingTTL:       testPendingTTL,
-		Store:            backing,
+		ID:                id,
+		GatewayAddr:       c.gatewayAddr,
+		DrainTimeout:      c.drainTimeout,
+		DrainPollInterval: 20 * time.Millisecond,
+		HealthInterval:    healthInterval,
+		SnapshotInterval:  c.snapshotInterval,
+		RegisterInterval:  testRegisterInterval,
+		RegisterToken:     c.token,
+		AdvertiseWS:       wsURL,
+		AdvertiseGRPC:     grpcLis.Addr().String(),
+		PendingTTL:        testPendingTTL,
+		Store:             backing,
 	})
 
 	w.OnSessionCreate(onCreate)
@@ -356,6 +359,10 @@ func (c *cluster) buildWorker(id string, onCreate func(string) worker.State, hea
 		}
 		return []byte(fmt.Sprintf("worker=%s session=%s count=%d", id, sessionID, n))
 	})
+
+	if c.configureWorker != nil {
+		c.configureWorker(id, w)
+	}
 
 	go w.StartGRPCOn(grpcLis)
 
@@ -623,6 +630,68 @@ func (c *cluster) reportDistribution(label string, counts map[string]int) {
 		parts = append(parts, fmt.Sprintf("%s=%d", id, counts[id]))
 	}
 	c.t.Logf("%s: %s", label, strings.Join(parts, " "))
+}
+
+func (c *cluster) addScaleWorker(id string) *testWorker {
+	c.t.Helper()
+
+	onCreate := func(string) worker.State { return &counter{} }
+	return c.buildWorker(id, onCreate, testHealthInterval, c.store, true)
+}
+
+func newScaleCluster(t *testing.T, workers int) *cluster {
+	t.Helper()
+
+	c := newEmptyCluster(t)
+	c.drainTimeout = 30 * time.Second
+	c.snapshotInterval = 500 * time.Millisecond
+
+	for i := 1; i <= workers; i++ {
+		c.addScaleWorker(fmt.Sprintf("worker-%d", i))
+	}
+	return c
+}
+
+func (c *cluster) connectLoadClient() *loadClient {
+	c.t.Helper()
+
+	conn, _, err := dialGateway(c)
+	if err != nil {
+		c.t.Fatalf("load client dial: %v", err)
+	}
+	c.t.Cleanup(func() { conn.Close() })
+
+	return &loadClient{conn: conn}
+}
+
+func (c *cluster) storeDistribution(clients []*loadClient) map[string]int {
+	c.t.Helper()
+
+	counts := make(map[string]int)
+	for _, lc := range clients {
+		id, ok := lc.session.Load().(string)
+		if !ok {
+			continue
+		}
+		data, err := c.store.Load(context.Background(), id)
+		if err != nil || data == nil {
+			continue
+		}
+		counts[data.WorkerID]++
+	}
+	return counts
+}
+
+func (c *cluster) sessionIDs() []string {
+	c.t.Helper()
+
+	var ids []string
+	for _, key := range c.redis.Keys() {
+		if id, ok := strings.CutPrefix(key, "session:"); ok {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func dialGateway(c *cluster) (*websocket.Conn, *http.Response, error) {

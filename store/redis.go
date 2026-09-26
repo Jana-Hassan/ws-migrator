@@ -36,10 +36,10 @@ func (s *RedisStore) snapshotKey(sessionID string) string {
 	return fmt.Sprintf("%s%s", snapshotPrefix, sessionID)
 }
 
-func (s *RedisStore) SaveSnapshot(ctx context.Context, sessionID string, state []byte, appliedSeq uint64) error {
+func (s *RedisStore) SaveSnapshot(ctx context.Context, sessionID string, snap Snapshot) error {
 	key := s.snapshotKey(sessionID)
 
-	err := s.client.HSet(ctx, key, "state", state, "applied_seq", appliedSeq).Err()
+	err := s.client.HSet(ctx, key, "state", snap.State, "applied_seq", snap.AppliedSeq, "outbox", snap.Outbox).Err()
 	if err != nil {
 		return fmt.Errorf("save snapshot %s: %w", sessionID, err)
 	}
@@ -50,21 +50,25 @@ func (s *RedisStore) SaveSnapshot(ctx context.Context, sessionID string, state [
 	return nil
 }
 
-func (s *RedisStore) LoadSnapshot(ctx context.Context, sessionID string) ([]byte, uint64, error) {
+func (s *RedisStore) LoadSnapshot(ctx context.Context, sessionID string) (*Snapshot, error) {
 	fields, err := s.client.HGetAll(ctx, s.snapshotKey(sessionID)).Result()
 	if err != nil {
-		return nil, 0, fmt.Errorf("load snapshot %s: %w", sessionID, err)
+		return nil, fmt.Errorf("load snapshot %s: %w", sessionID, err)
 	}
 	if len(fields) == 0 {
-		return nil, 0, nil
+		return nil, nil
 	}
 
 	appliedSeq, err := strconv.ParseUint(fields["applied_seq"], 10, 64)
 	if err != nil {
-		return nil, 0, fmt.Errorf("parse applied_seq for snapshot %s: %w", sessionID, err)
+		return nil, fmt.Errorf("parse applied_seq for snapshot %s: %w", sessionID, err)
 	}
 
-	return []byte(fields["state"]), appliedSeq, nil
+	return &Snapshot{
+		State:      []byte(fields["state"]),
+		AppliedSeq: appliedSeq,
+		Outbox:     []byte(fields["outbox"]),
+	}, nil
 }
 
 func (s *RedisStore) DeleteSnapshot(ctx context.Context, sessionID string) error {

@@ -35,23 +35,27 @@ func newGRPCServer(workerID string, sessions *sessionRegistry, onCreate func(ses
 }
 
 func (g *grpcServer) Restore(ctx context.Context, req *migratorpb.RestoreRequest) (*migratorpb.RestoreResponse, error) {
-	if len(req.State) == 0 {
-		if req.AppliedSeq > 0 && g.onCreate != nil {
-			g.sessions.stage(req.SessionId, g.onCreate(req.SessionId), req.AppliedSeq)
-		}
-		return &migratorpb.RestoreResponse{Ok: true}, nil
-	}
-	if g.onCreate == nil {
-		return &migratorpb.RestoreResponse{Ok: false, Error: "worker has no session state factory"}, nil
-	}
-
-	state := g.onCreate(req.SessionId)
-	if err := state.Restore(req.State); err != nil {
+	outbox, err := decodeOutbox(req.Outbox)
+	if err != nil {
 		return &migratorpb.RestoreResponse{Ok: false, Error: err.Error()}, nil
 	}
 
-	g.sessions.stage(req.SessionId, state, req.AppliedSeq)
-	log.Printf("[worker-%s] restored session %s", g.workerID, req.SessionId)
+	var state State
+	if g.onCreate != nil {
+		state = g.onCreate(req.SessionId)
+	}
+
+	if len(req.State) > 0 {
+		if state == nil {
+			return &migratorpb.RestoreResponse{Ok: false, Error: "worker has no session state factory"}, nil
+		}
+		if err := state.Restore(req.State); err != nil {
+			return &migratorpb.RestoreResponse{Ok: false, Error: err.Error()}, nil
+		}
+	}
+
+	g.sessions.stage(req.SessionId, state, req.AppliedSeq, outbox)
+	log.Printf("[worker-%s] restored session %s at seq %d with %d unacked frames", g.workerID, req.SessionId, req.AppliedSeq, len(outbox))
 
 	return &migratorpb.RestoreResponse{Ok: true}, nil
 }
@@ -78,14 +82,33 @@ func (g *grpcServer) Checkpoint(ctx context.Context, req *migratorpb.CheckpointR
 		}
 	}
 
-	log.Printf("[worker-%s] checkpointed session %s", g.workerID, req.SessionId)
+	if req.Freeze {
+		session.frozen = true
+	}
+
+	log.Printf("[worker-%s] checkpointed session %s (freeze=%v)", g.workerID, req.SessionId, req.Freeze)
 
 	return &migratorpb.CheckpointResponse{
 		SessionId:  req.SessionId,
 		State:      stateBytes,
 		Ok:         true,
 		AppliedSeq: session.appliedSeq,
+		Outbox:     encodeOutbox(session.outbox),
 	}, nil
+}
+
+func (g *grpcServer) Resume(ctx context.Context, req *migratorpb.ResumeRequest) (*migratorpb.ResumeResponse, error) {
+	session, ok := g.sessions.get(req.SessionId)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "session %s not found", req.SessionId)
+	}
+
+	session.mu.Lock()
+	session.frozen = false
+	session.mu.Unlock()
+
+	log.Printf("[worker-%s] resumed session %s", g.workerID, req.SessionId)
+	return &migratorpb.ResumeResponse{Ok: true}, nil
 }
 
 func (g *grpcServer) HealthStream(req *migratorpb.HealthStreamRequest, stream grpc.ServerStreamingServer[migratorpb.HealthUpdate]) error {

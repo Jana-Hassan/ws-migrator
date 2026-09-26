@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -53,6 +54,15 @@ type Worker struct {
 	onMessage        func(sessionID string, state State, msg []byte) []byte
 	onCreate         func(sessionID string) State
 	onEnd            func(sessionID string, state State)
+	onReady          func(Ready)
+}
+
+var ErrFrozen = errors.New("session is being handed over, retry shortly")
+
+type Ready struct {
+	SessionID string
+	State     State
+	Resumed   bool
 }
 
 type Config struct {
@@ -143,13 +153,57 @@ func (w *Worker) OnSessionEnd(fn func(sessionID string, state State)) {
 	w.onEnd = fn
 }
 
+func (w *Worker) OnSessionReady(fn func(Ready)) {
+	w.onReady = fn
+}
+
+func (w *Worker) Update(sessionID string, fn func(State)) error {
+	s, ok := w.sessions.get(sessionID)
+	if !ok {
+		return fmt.Errorf("session %s not on worker %s", sessionID, w.id)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.frozen {
+		return ErrFrozen
+	}
+
+	fn(s.state)
+	s.dirty = true
+	return nil
+}
+
 func (w *Worker) Send(sessionID string, msg []byte) error {
 	s, ok := w.sessions.get(sessionID)
 	if !ok {
 		return fmt.Errorf("session %s not on worker %s", sessionID, w.id)
 	}
 
-	return s.write(websocket.TextMessage, msg)
+	return s.write(websocket.TextMessage, frame.EncodeDown(frame.Plain, 0, msg))
+}
+
+func (w *Worker) Push(sessionID string, fn func(State) (key uint64, msg []byte, ok bool)) error {
+	s, ok := w.sessions.get(sessionID)
+	if !ok {
+		return fmt.Errorf("session %s not on worker %s", sessionID, w.id)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.frozen {
+		return ErrFrozen
+	}
+
+	key, msg, ok := fn(s.state)
+	if !ok {
+		return nil
+	}
+
+	s.dirty = true
+	return s.emit(outFrame{kind: frame.Push, key: key, messageType: websocket.TextMessage, payload: msg})
 }
 
 func (w *Worker) Start() error {
@@ -253,6 +307,7 @@ func (w *Worker) Handler() http.Handler {
 
 func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 	sessionID := r.URL.Query().Get("session_id")
+	resumed := r.URL.Query().Get("resumed") == "1"
 	if sessionID == "" {
 		http.Error(wr, "missing session_id", http.StatusBadRequest)
 		return
@@ -269,9 +324,10 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		conn: conn,
 	}
 
-	if state, appliedSeq, ok := w.sessions.take(sessionID); ok {
-		s.state = state
-		s.appliedSeq = appliedSeq
+	if staged, ok := w.sessions.take(sessionID); ok {
+		s.state = staged.state
+		s.appliedSeq = staged.appliedSeq
+		s.outbox = staged.outbox
 	} else if w.onCreate != nil {
 		s.state = w.onCreate(sessionID)
 	}
@@ -292,6 +348,18 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[worker-%s] session %s connected", w.id, sessionID)
 
+	s.mu.Lock()
+	err = s.flushOutbox()
+	s.mu.Unlock()
+	if err != nil {
+		log.Printf("[worker-%s] session %s: could not re-send unacked frames: %v", w.id, sessionID, err)
+		return
+	}
+
+	if w.onReady != nil {
+		w.onReady(Ready{SessionID: sessionID, State: s.state, Resumed: resumed})
+	}
+
 	for {
 		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -305,16 +373,38 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		seq, payload, ok := frame.Decode(msg)
+		kind, seq, payload, ok := frame.DecodeUp(msg)
 		if !ok {
 			log.Printf("[worker-%s] session %s: malformed frame, dropped", w.id, sessionID)
 			continue
 		}
 
+		if kind == frame.Ack {
+			reply, push, ok := frame.DecodeAck(payload)
+			if !ok {
+				log.Printf("[worker-%s] session %s: malformed ack, dropped", w.id, sessionID)
+				continue
+			}
+			s.mu.Lock()
+			s.outbox = trimOutbox(s.outbox, reply, push)
+			s.mu.Unlock()
+			continue
+		}
+
 		s.mu.Lock()
+		if s.frozen {
+			s.mu.Unlock()
+			log.Printf("[worker-%s] session %s: frozen, left seq %d for the next worker", w.id, sessionID, seq)
+			continue
+		}
 		if seq <= s.appliedSeq {
 			s.mu.Unlock()
 			log.Printf("[worker-%s] session %s: skipped duplicate seq %d", w.id, sessionID, seq)
+			continue
+		}
+		if seq > s.appliedSeq+1 {
+			s.mu.Unlock()
+			log.Printf("[worker-%s] session %s: seq %d arrived ahead of %d, waiting for the resend", w.id, sessionID, seq, s.appliedSeq+1)
 			continue
 		}
 
@@ -326,9 +416,10 @@ func (w *Worker) handleConnection(wr http.ResponseWriter, r *http.Request) {
 		}
 		s.appliedSeq = seq
 		s.dirty = true
+		err = s.emit(outFrame{kind: frame.Reply, key: seq, messageType: byte(messageType), payload: response})
 		s.mu.Unlock()
 
-		if err := s.write(messageType, response); err != nil {
+		if err != nil {
 			log.Printf("[worker-%s] write error: %v", w.id, err)
 			return
 		}

@@ -292,6 +292,7 @@ func (x *UnregisterResponse) GetOk() bool {
 type CheckpointRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	Freeze        bool                   `protobuf:"varint,2,opt,name=freeze,proto3" json:"freeze,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -333,6 +334,101 @@ func (x *CheckpointRequest) GetSessionId() string {
 	return ""
 }
 
+func (x *CheckpointRequest) GetFreeze() bool {
+	if x != nil {
+		return x.Freeze
+	}
+	return false
+}
+
+type ResumeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResumeRequest) Reset() {
+	*x = ResumeRequest{}
+	mi := &file_proto_migrator_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResumeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResumeRequest) ProtoMessage() {}
+
+func (x *ResumeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_migrator_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResumeRequest.ProtoReflect.Descriptor instead.
+func (*ResumeRequest) Descriptor() ([]byte, []int) {
+	return file_proto_migrator_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ResumeRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+type ResumeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResumeResponse) Reset() {
+	*x = ResumeResponse{}
+	mi := &file_proto_migrator_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResumeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResumeResponse) ProtoMessage() {}
+
+func (x *ResumeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_migrator_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResumeResponse.ProtoReflect.Descriptor instead.
+func (*ResumeResponse) Descriptor() ([]byte, []int) {
+	return file_proto_migrator_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ResumeResponse) GetOk() bool {
+	if x != nil {
+		return x.Ok
+	}
+	return false
+}
+
 type CheckpointResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
@@ -340,13 +436,14 @@ type CheckpointResponse struct {
 	Ok            bool                   `protobuf:"varint,3,opt,name=ok,proto3" json:"ok,omitempty"`
 	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
 	AppliedSeq    uint64                 `protobuf:"varint,5,opt,name=applied_seq,json=appliedSeq,proto3" json:"applied_seq,omitempty"`
+	Outbox        []byte                 `protobuf:"bytes,6,opt,name=outbox,proto3" json:"outbox,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CheckpointResponse) Reset() {
 	*x = CheckpointResponse{}
-	mi := &file_proto_migrator_proto_msgTypes[5]
+	mi := &file_proto_migrator_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -358,7 +455,7 @@ func (x *CheckpointResponse) String() string {
 func (*CheckpointResponse) ProtoMessage() {}
 
 func (x *CheckpointResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[5]
+	mi := &file_proto_migrator_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -371,7 +468,7 @@ func (x *CheckpointResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointResponse.ProtoReflect.Descriptor instead.
 func (*CheckpointResponse) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{5}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CheckpointResponse) GetSessionId() string {
@@ -409,18 +506,26 @@ func (x *CheckpointResponse) GetAppliedSeq() uint64 {
 	return 0
 }
 
+func (x *CheckpointResponse) GetOutbox() []byte {
+	if x != nil {
+		return x.Outbox
+	}
+	return nil
+}
+
 type RestoreRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	State         []byte                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`
 	AppliedSeq    uint64                 `protobuf:"varint,3,opt,name=applied_seq,json=appliedSeq,proto3" json:"applied_seq,omitempty"`
+	Outbox        []byte                 `protobuf:"bytes,4,opt,name=outbox,proto3" json:"outbox,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
 	*x = RestoreRequest{}
-	mi := &file_proto_migrator_proto_msgTypes[6]
+	mi := &file_proto_migrator_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -432,7 +537,7 @@ func (x *RestoreRequest) String() string {
 func (*RestoreRequest) ProtoMessage() {}
 
 func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[6]
+	mi := &file_proto_migrator_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -445,7 +550,7 @@ func (x *RestoreRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreRequest.ProtoReflect.Descriptor instead.
 func (*RestoreRequest) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{6}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RestoreRequest) GetSessionId() string {
@@ -469,6 +574,13 @@ func (x *RestoreRequest) GetAppliedSeq() uint64 {
 	return 0
 }
 
+func (x *RestoreRequest) GetOutbox() []byte {
+	if x != nil {
+		return x.Outbox
+	}
+	return nil
+}
+
 type RestoreResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ok            bool                   `protobuf:"varint,1,opt,name=ok,proto3" json:"ok,omitempty"`
@@ -479,7 +591,7 @@ type RestoreResponse struct {
 
 func (x *RestoreResponse) Reset() {
 	*x = RestoreResponse{}
-	mi := &file_proto_migrator_proto_msgTypes[7]
+	mi := &file_proto_migrator_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -491,7 +603,7 @@ func (x *RestoreResponse) String() string {
 func (*RestoreResponse) ProtoMessage() {}
 
 func (x *RestoreResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[7]
+	mi := &file_proto_migrator_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -504,7 +616,7 @@ func (x *RestoreResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreResponse.ProtoReflect.Descriptor instead.
 func (*RestoreResponse) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{7}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RestoreResponse) GetOk() bool {
@@ -532,7 +644,7 @@ type DrainRequest struct {
 
 func (x *DrainRequest) Reset() {
 	*x = DrainRequest{}
-	mi := &file_proto_migrator_proto_msgTypes[8]
+	mi := &file_proto_migrator_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +656,7 @@ func (x *DrainRequest) String() string {
 func (*DrainRequest) ProtoMessage() {}
 
 func (x *DrainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[8]
+	mi := &file_proto_migrator_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +669,7 @@ func (x *DrainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainRequest.ProtoReflect.Descriptor instead.
 func (*DrainRequest) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{8}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *DrainRequest) GetWorkerId() string {
@@ -591,7 +703,7 @@ type DrainResponse struct {
 
 func (x *DrainResponse) Reset() {
 	*x = DrainResponse{}
-	mi := &file_proto_migrator_proto_msgTypes[9]
+	mi := &file_proto_migrator_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -603,7 +715,7 @@ func (x *DrainResponse) String() string {
 func (*DrainResponse) ProtoMessage() {}
 
 func (x *DrainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[9]
+	mi := &file_proto_migrator_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -616,7 +728,7 @@ func (x *DrainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainResponse.ProtoReflect.Descriptor instead.
 func (*DrainResponse) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{9}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DrainResponse) GetAccepted() bool {
@@ -641,7 +753,7 @@ type HealthStreamRequest struct {
 
 func (x *HealthStreamRequest) Reset() {
 	*x = HealthStreamRequest{}
-	mi := &file_proto_migrator_proto_msgTypes[10]
+	mi := &file_proto_migrator_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -653,7 +765,7 @@ func (x *HealthStreamRequest) String() string {
 func (*HealthStreamRequest) ProtoMessage() {}
 
 func (x *HealthStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[10]
+	mi := &file_proto_migrator_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -666,7 +778,7 @@ func (x *HealthStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthStreamRequest.ProtoReflect.Descriptor instead.
 func (*HealthStreamRequest) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{10}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{12}
 }
 
 type HealthUpdate struct {
@@ -683,7 +795,7 @@ type HealthUpdate struct {
 
 func (x *HealthUpdate) Reset() {
 	*x = HealthUpdate{}
-	mi := &file_proto_migrator_proto_msgTypes[11]
+	mi := &file_proto_migrator_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -695,7 +807,7 @@ func (x *HealthUpdate) String() string {
 func (*HealthUpdate) ProtoMessage() {}
 
 func (x *HealthUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_migrator_proto_msgTypes[11]
+	mi := &file_proto_migrator_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -708,7 +820,7 @@ func (x *HealthUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthUpdate.ProtoReflect.Descriptor instead.
 func (*HealthUpdate) Descriptor() ([]byte, []int) {
-	return file_proto_migrator_proto_rawDescGZIP(), []int{11}
+	return file_proto_migrator_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *HealthUpdate) GetWorkerId() string {
@@ -770,10 +882,16 @@ const file_proto_migrator_proto_rawDesc = "" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x14\n" +
 	"\x05token\x18\x02 \x01(\tR\x05token\"$\n" +
 	"\x12UnregisterResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"2\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"J\n" +
 	"\x11CheckpointRequest\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"\x90\x01\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
+	"\x06freeze\x18\x02 \x01(\bR\x06freeze\".\n" +
+	"\rResumeRequest\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\" \n" +
+	"\x0eResumeResponse\x12\x0e\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\xa8\x01\n" +
 	"\x12CheckpointResponse\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
@@ -781,13 +899,15 @@ const file_proto_migrator_proto_rawDesc = "" +
 	"\x02ok\x18\x03 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05error\x18\x04 \x01(\tR\x05error\x12\x1f\n" +
 	"\vapplied_seq\x18\x05 \x01(\x04R\n" +
-	"appliedSeq\"f\n" +
+	"appliedSeq\x12\x16\n" +
+	"\x06outbox\x18\x06 \x01(\fR\x06outbox\"~\n" +
 	"\x0eRestoreRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\fR\x05state\x12\x1f\n" +
 	"\vapplied_seq\x18\x03 \x01(\x04R\n" +
-	"appliedSeq\"7\n" +
+	"appliedSeq\x12\x16\n" +
+	"\x06outbox\x18\x04 \x01(\fR\x06outbox\"7\n" +
 	"\x0fRestoreResponse\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\"Y\n" +
@@ -810,11 +930,12 @@ const file_proto_migrator_proto_rawDesc = "" +
 	"\x19WORKER_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15WORKER_STATUS_SERVING\x10\x01\x12\x1a\n" +
 	"\x16WORKER_STATUS_DRAINING\x10\x02\x12\x1a\n" +
-	"\x16WORKER_STATUS_STOPPING\x10\x032\xf3\x01\n" +
+	"\x16WORKER_STATUS_STOPPING\x10\x032\xb6\x02\n" +
 	"\rWorkerService\x12M\n" +
 	"\n" +
 	"Checkpoint\x12\x1e.migrator.v1.CheckpointRequest\x1a\x1f.migrator.v1.CheckpointResponse\x12D\n" +
-	"\aRestore\x12\x1b.migrator.v1.RestoreRequest\x1a\x1c.migrator.v1.RestoreResponse\x12M\n" +
+	"\aRestore\x12\x1b.migrator.v1.RestoreRequest\x1a\x1c.migrator.v1.RestoreResponse\x12A\n" +
+	"\x06Resume\x12\x1a.migrator.v1.ResumeRequest\x1a\x1b.migrator.v1.ResumeResponse\x12M\n" +
 	"\fHealthStream\x12 .migrator.v1.HealthStreamRequest\x1a\x19.migrator.v1.HealthUpdate0\x012\xe8\x01\n" +
 	"\x0eGatewayService\x12>\n" +
 	"\x05Drain\x12\x19.migrator.v1.DrainRequest\x1a\x1a.migrator.v1.DrainResponse\x12G\n" +
@@ -835,7 +956,7 @@ func file_proto_migrator_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_migrator_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_migrator_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_proto_migrator_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_proto_migrator_proto_goTypes = []any{
 	(WorkerStatus)(0),           // 0: migrator.v1.WorkerStatus
 	(*RegisterRequest)(nil),     // 1: migrator.v1.RegisterRequest
@@ -843,30 +964,34 @@ var file_proto_migrator_proto_goTypes = []any{
 	(*UnregisterRequest)(nil),   // 3: migrator.v1.UnregisterRequest
 	(*UnregisterResponse)(nil),  // 4: migrator.v1.UnregisterResponse
 	(*CheckpointRequest)(nil),   // 5: migrator.v1.CheckpointRequest
-	(*CheckpointResponse)(nil),  // 6: migrator.v1.CheckpointResponse
-	(*RestoreRequest)(nil),      // 7: migrator.v1.RestoreRequest
-	(*RestoreResponse)(nil),     // 8: migrator.v1.RestoreResponse
-	(*DrainRequest)(nil),        // 9: migrator.v1.DrainRequest
-	(*DrainResponse)(nil),       // 10: migrator.v1.DrainResponse
-	(*HealthStreamRequest)(nil), // 11: migrator.v1.HealthStreamRequest
-	(*HealthUpdate)(nil),        // 12: migrator.v1.HealthUpdate
+	(*ResumeRequest)(nil),       // 6: migrator.v1.ResumeRequest
+	(*ResumeResponse)(nil),      // 7: migrator.v1.ResumeResponse
+	(*CheckpointResponse)(nil),  // 8: migrator.v1.CheckpointResponse
+	(*RestoreRequest)(nil),      // 9: migrator.v1.RestoreRequest
+	(*RestoreResponse)(nil),     // 10: migrator.v1.RestoreResponse
+	(*DrainRequest)(nil),        // 11: migrator.v1.DrainRequest
+	(*DrainResponse)(nil),       // 12: migrator.v1.DrainResponse
+	(*HealthStreamRequest)(nil), // 13: migrator.v1.HealthStreamRequest
+	(*HealthUpdate)(nil),        // 14: migrator.v1.HealthUpdate
 }
 var file_proto_migrator_proto_depIdxs = []int32{
 	0,  // 0: migrator.v1.HealthUpdate.status:type_name -> migrator.v1.WorkerStatus
 	5,  // 1: migrator.v1.WorkerService.Checkpoint:input_type -> migrator.v1.CheckpointRequest
-	7,  // 2: migrator.v1.WorkerService.Restore:input_type -> migrator.v1.RestoreRequest
-	11, // 3: migrator.v1.WorkerService.HealthStream:input_type -> migrator.v1.HealthStreamRequest
-	9,  // 4: migrator.v1.GatewayService.Drain:input_type -> migrator.v1.DrainRequest
-	1,  // 5: migrator.v1.GatewayService.Register:input_type -> migrator.v1.RegisterRequest
-	3,  // 6: migrator.v1.GatewayService.Unregister:input_type -> migrator.v1.UnregisterRequest
-	6,  // 7: migrator.v1.WorkerService.Checkpoint:output_type -> migrator.v1.CheckpointResponse
-	8,  // 8: migrator.v1.WorkerService.Restore:output_type -> migrator.v1.RestoreResponse
-	12, // 9: migrator.v1.WorkerService.HealthStream:output_type -> migrator.v1.HealthUpdate
-	10, // 10: migrator.v1.GatewayService.Drain:output_type -> migrator.v1.DrainResponse
-	2,  // 11: migrator.v1.GatewayService.Register:output_type -> migrator.v1.RegisterResponse
-	4,  // 12: migrator.v1.GatewayService.Unregister:output_type -> migrator.v1.UnregisterResponse
-	7,  // [7:13] is the sub-list for method output_type
-	1,  // [1:7] is the sub-list for method input_type
+	9,  // 2: migrator.v1.WorkerService.Restore:input_type -> migrator.v1.RestoreRequest
+	6,  // 3: migrator.v1.WorkerService.Resume:input_type -> migrator.v1.ResumeRequest
+	13, // 4: migrator.v1.WorkerService.HealthStream:input_type -> migrator.v1.HealthStreamRequest
+	11, // 5: migrator.v1.GatewayService.Drain:input_type -> migrator.v1.DrainRequest
+	1,  // 6: migrator.v1.GatewayService.Register:input_type -> migrator.v1.RegisterRequest
+	3,  // 7: migrator.v1.GatewayService.Unregister:input_type -> migrator.v1.UnregisterRequest
+	8,  // 8: migrator.v1.WorkerService.Checkpoint:output_type -> migrator.v1.CheckpointResponse
+	10, // 9: migrator.v1.WorkerService.Restore:output_type -> migrator.v1.RestoreResponse
+	7,  // 10: migrator.v1.WorkerService.Resume:output_type -> migrator.v1.ResumeResponse
+	14, // 11: migrator.v1.WorkerService.HealthStream:output_type -> migrator.v1.HealthUpdate
+	12, // 12: migrator.v1.GatewayService.Drain:output_type -> migrator.v1.DrainResponse
+	2,  // 13: migrator.v1.GatewayService.Register:output_type -> migrator.v1.RegisterResponse
+	4,  // 14: migrator.v1.GatewayService.Unregister:output_type -> migrator.v1.UnregisterResponse
+	8,  // [8:15] is the sub-list for method output_type
+	1,  // [1:8] is the sub-list for method input_type
 	1,  // [1:1] is the sub-list for extension type_name
 	1,  // [1:1] is the sub-list for extension extendee
 	0,  // [0:1] is the sub-list for field type_name
@@ -883,7 +1008,7 @@ func file_proto_migrator_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_migrator_proto_rawDesc), len(file_proto_migrator_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

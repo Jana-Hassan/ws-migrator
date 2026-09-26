@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"time"
+
+	"github.com/Jana-Hassan/ws-migrator/store"
 )
 
 func (w *Worker) StartSnapshots(ctx context.Context) {
@@ -27,12 +29,12 @@ func (w *Worker) StartSnapshots(ctx context.Context) {
 
 func (w *Worker) snapshotAll(ctx context.Context) {
 	for _, s := range w.sessions.all() {
-		state, appliedSeq, ok := s.takeSnapshot()
+		snap, ok := s.takeSnapshot()
 		if !ok {
 			continue
 		}
 
-		if err := w.store.SaveSnapshot(ctx, s.id, state, appliedSeq); err != nil {
+		if err := w.store.SaveSnapshot(ctx, s.id, snap); err != nil {
 			w.snapshotFailures.Add(1)
 			log.Printf("[worker-%s] snapshot %s failed: %v", w.id, s.id, err)
 			continue
@@ -41,20 +43,20 @@ func (w *Worker) snapshotAll(ctx context.Context) {
 	}
 }
 
-func (s *session) takeSnapshot() ([]byte, uint64, bool) {
+func (s *session) takeSnapshot() (store.Snapshot, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if !s.dirty || s.state == nil {
-		return nil, 0, false
+		return store.Snapshot{}, false
 	}
 
 	state, err := s.state.Serialize()
 	if err != nil {
 		log.Printf("snapshot %s: serialize failed: %v", s.id, err)
-		return nil, 0, false
+		return store.Snapshot{}, false
 	}
 
 	s.dirty = false
-	return state, s.appliedSeq, true
+	return store.Snapshot{State: state, AppliedSeq: s.appliedSeq, Outbox: encodeOutbox(s.outbox)}, true
 }

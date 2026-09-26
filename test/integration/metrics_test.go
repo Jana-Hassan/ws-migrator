@@ -8,6 +8,8 @@ import (
 	"github.com/Jana-Hassan/ws-migrator/gateway"
 )
 
+type gatewayStats = gateway.Stats
+
 func (c *cluster) stats() gateway.Stats {
 	c.t.Helper()
 

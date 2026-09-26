@@ -19,8 +19,9 @@ type Metrics struct {
 	recoveriesSucceeded atomic.Uint64
 	recoveriesFailed    atomic.Uint64
 
-	resendsSent atomic.Uint64
-	resendGaps  atomic.Uint64
+	resendsSent       atomic.Uint64
+	resendGaps        atomic.Uint64
+	duplicatesDropped atomic.Uint64
 
 	snapshotWriteFailures atomic.Uint64
 
@@ -75,8 +76,9 @@ type Stats struct {
 	RecoveriesSucceeded uint64 `json:"recoveries_succeeded"`
 	RecoveriesFailed    uint64 `json:"recoveries_failed"`
 
-	ResendsSent uint64 `json:"resends_sent"`
-	ResendGaps  uint64 `json:"resend_gaps"`
+	ResendsSent       uint64 `json:"resends_sent"`
+	ResendGaps        uint64 `json:"resend_gaps"`
+	DuplicatesDropped uint64 `json:"duplicates_dropped"`
 
 	SnapshotWriteFailures uint64 `json:"snapshot_write_failures"`
 
@@ -105,6 +107,7 @@ func (s *Server) Stats() Stats {
 		RecoveriesFailed:      m.recoveriesFailed.Load(),
 		ResendsSent:           m.resendsSent.Load(),
 		ResendGaps:            m.resendGaps.Load(),
+		DuplicatesDropped:     m.duplicatesDropped.Load(),
 		SnapshotWriteFailures: m.snapshotWriteFailures.Load(),
 	}
 
