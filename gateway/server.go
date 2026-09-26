@@ -419,6 +419,14 @@ func (s *Server) pipeMessages(src, dst *websocket.Conn, direction string) {
 }
 
 func (s *Server) migrateWithFallback(session *Session, req migrateRequest) bool {
+	session.mu.Lock()
+	placed := session.WorkerID
+	session.mu.Unlock()
+
+	if req.target == placed {
+		return false
+	}
+
 	if s.migrate(session, req.target) {
 		return true
 	}

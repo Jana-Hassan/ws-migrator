@@ -21,13 +21,13 @@ import (
 )
 
 const (
-	defaultDrainTimeout     = 30 * time.Second
-	drainPollInterval       = 500 * time.Millisecond
-	defaultHealthInterval   = 5 * time.Second
-	defaultSnapshotInterval = 5 * time.Second
-	writeWait               = 10 * time.Second
-	defaultRegisterInterval = 30 * time.Second
-	defaultPendingTTL       = 60 * time.Second
+	defaultDrainTimeout      = 30 * time.Second
+	defaultDrainPollInterval = 100 * time.Millisecond
+	defaultHealthInterval    = 5 * time.Second
+	defaultSnapshotInterval  = 5 * time.Second
+	writeWait                = 10 * time.Second
+	defaultRegisterInterval  = 30 * time.Second
+	defaultPendingTTL        = 60 * time.Second
 )
 
 type Worker struct {
@@ -36,6 +36,7 @@ type Worker struct {
 	grpcAddr         string
 	gatewayAddr      string
 	drainTimeout     time.Duration
+	drainPoll        time.Duration
 	healthInterval   time.Duration
 	snapshotInterval time.Duration
 	registerInterval time.Duration
@@ -55,19 +56,20 @@ type Worker struct {
 }
 
 type Config struct {
-	ID               string
-	GRPCAddr         string
-	WSAddr           string
-	GatewayAddr      string
-	DrainTimeout     time.Duration
-	HealthInterval   time.Duration
-	SnapshotInterval time.Duration
-	RegisterInterval time.Duration
-	PendingTTL       time.Duration
-	RegisterToken    string
-	AdvertiseWS      string
-	AdvertiseGRPC    string
-	Store            store.Store
+	ID                string
+	GRPCAddr          string
+	WSAddr            string
+	GatewayAddr       string
+	DrainTimeout      time.Duration
+	DrainPollInterval time.Duration
+	HealthInterval    time.Duration
+	SnapshotInterval  time.Duration
+	RegisterInterval  time.Duration
+	PendingTTL        time.Duration
+	RegisterToken     string
+	AdvertiseWS       string
+	AdvertiseGRPC     string
+	Store             store.Store
 }
 
 var upgrader = websocket.Upgrader{
@@ -81,6 +83,9 @@ var upgrader = websocket.Upgrader{
 func NewWorker(cfg Config) *Worker {
 	if cfg.DrainTimeout == 0 {
 		cfg.DrainTimeout = defaultDrainTimeout
+	}
+	if cfg.DrainPollInterval == 0 {
+		cfg.DrainPollInterval = defaultDrainPollInterval
 	}
 	if cfg.HealthInterval == 0 {
 		cfg.HealthInterval = defaultHealthInterval
@@ -107,6 +112,7 @@ func NewWorker(cfg Config) *Worker {
 		grpcAddr:         cfg.GRPCAddr,
 		gatewayAddr:      cfg.GatewayAddr,
 		drainTimeout:     cfg.DrainTimeout,
+		drainPoll:        cfg.DrainPollInterval,
 		healthInterval:   cfg.HealthInterval,
 		snapshotInterval: cfg.SnapshotInterval,
 		registerInterval: cfg.RegisterInterval,
@@ -207,7 +213,7 @@ func (w *Worker) Drain(reason string) {
 			break
 		}
 
-		time.Sleep(drainPollInterval)
+		time.Sleep(w.drainPoll)
 	}
 
 	log.Printf("[worker-%s] drain timeout, %d sessions still active", w.id, w.sessions.count())

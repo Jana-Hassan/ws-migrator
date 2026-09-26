@@ -72,14 +72,33 @@ func (s *Session) outboundAfter(appliedSeq uint64) ([]bufferedMessage, bool) {
 type Registry struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	workerOf map[string]string
 	onWorker map[string]int
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		sessions: make(map[string]*Session),
+		workerOf: make(map[string]string),
 		onWorker: make(map[string]int),
 	}
+}
+
+func (r *Registry) detach(sessionID string) {
+	worker, ok := r.workerOf[sessionID]
+	if !ok {
+		return
+	}
+
+	delete(r.workerOf, sessionID)
+	if r.onWorker[worker]--; r.onWorker[worker] <= 0 {
+		delete(r.onWorker, worker)
+	}
+}
+
+func (r *Registry) attach(sessionID, workerID string) {
+	r.workerOf[sessionID] = workerID
+	r.onWorker[workerID]++
 }
 
 func NewSessionID() string {
@@ -90,12 +109,9 @@ func (r *Registry) Add(session *Session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if existing, ok := r.sessions[session.ID]; ok {
-		r.onWorker[existing.WorkerID]--
-	}
-
+	r.detach(session.ID)
 	r.sessions[session.ID] = session
-	r.onWorker[session.WorkerID]++
+	r.attach(session.ID, session.WorkerID)
 }
 
 // deletes a session when client disconnects
@@ -103,15 +119,8 @@ func (r *Registry) Remove(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	session, ok := r.sessions[id]
-	if !ok {
-		return
-	}
-
 	delete(r.sessions, id)
-	if r.onWorker[session.WorkerID]--; r.onWorker[session.WorkerID] <= 0 {
-		delete(r.onWorker, session.WorkerID)
-	}
+	r.detach(id)
 }
 
 // gets session by id
@@ -128,8 +137,8 @@ func (r *Registry) AllOnWorker(workerID string) []*Session {
 	defer r.mu.RUnlock()
 
 	var result []*Session
-	for _, session := range r.sessions {
-		if session.WorkerID == workerID {
+	for id, session := range r.sessions {
+		if r.workerOf[id] == workerID {
 			result = append(result, session)
 		}
 	}
@@ -154,14 +163,13 @@ func (r *Registry) UpdateWorker(sessionID, workerID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	s, ok := r.sessions[sessionID]
-	if !ok || s.WorkerID == workerID {
+	if _, ok := r.sessions[sessionID]; !ok {
+		return
+	}
+	if r.workerOf[sessionID] == workerID {
 		return
 	}
 
-	if r.onWorker[s.WorkerID]--; r.onWorker[s.WorkerID] <= 0 {
-		delete(r.onWorker, s.WorkerID)
-	}
-	r.onWorker[workerID]++
-	s.WorkerID = workerID
+	r.detach(sessionID)
+	r.attach(sessionID, workerID)
 }
