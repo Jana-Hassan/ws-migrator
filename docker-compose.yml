@@ -1,0 +1,62 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  gateway:
+    build:
+      context: .
+      args:
+        CMD: ./cmd/gateway
+    ports:
+      - "8080:8080"
+    environment:
+      LISTEN_ADDR: ":8080"
+      GRPC_ADDR: ":9090"
+      REDIS_ADDR: redis:6379
+      REGISTER_TOKEN: local-dev-token
+    depends_on:
+      - redis
+
+  worker-1:
+    stop_grace_period: 45s
+    build:
+      context: .
+      args:
+        CMD: ./test/counter
+    environment:
+      WORKER_ID: worker-1
+      LISTEN_ADDR: ":8081"
+      GRPC_ADDR: ":9091"
+      WS_ADVERTISE: ws://worker-1:8081/ws
+      GRPC_ADVERTISE: worker-1:9091
+      GATEWAY_ADDR: gateway:9090
+      REDIS_ADDR: redis:6379
+      REGISTER_TOKEN: local-dev-token
+    depends_on:
+      - gateway
+
+  worker-2:
+    stop_grace_period: 45s
+    build:
+      context: .
+      args:
+        CMD: ./test/counter
+    environment:
+      WORKER_ID: worker-2
+      LISTEN_ADDR: ":8081"
+      GRPC_ADDR: ":9091"
+      WS_ADVERTISE: ws://worker-2:8081/ws
+      GRPC_ADVERTISE: worker-2:9091
+      GATEWAY_ADDR: gateway:9090
+      REDIS_ADDR: redis:6379
+      REGISTER_TOKEN: local-dev-token
+    depends_on:
+      - gateway
+
+volumes:
+  redis_data:

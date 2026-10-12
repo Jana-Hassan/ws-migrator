@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ws-gateway
+  labels:
+    app: ws-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: ws-gateway
+  template:
+    metadata:
+      labels:
+        app: ws-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: ws-migrator/gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: client
+              containerPort: 8080
+            - name: grpc
+              containerPort: 9090
+          env:
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: GRPC_ADDR
+              value: ":9090"
+            - name: REDIS_ADDR
+              value: ws-redis:6379
+            - name: REGISTER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ws-migrator
+                  key: register-token
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: client
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: client
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ws-gateway
+spec:
+  selector:
+    app: ws-gateway
+  ports:
+    - name: client
+      port: 8080
+      targetPort: client
+    - name: grpc
+      port: 9090
+      targetPort: grpc

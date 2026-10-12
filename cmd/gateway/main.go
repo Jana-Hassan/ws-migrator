@@ -2,16 +2,51 @@ package main
 
 import (
 	"log"
+
+	"context"
 	"os"
+	"strings"
 
 	"github.com/Jana-Hassan/ws-migrator/gateway"
+	"github.com/Jana-Hassan/ws-migrator/store"
 )
 
 func main() {
-	workerAddr := getEnv("WORKER_ADDR", "ws://localhost:8081/ws")
-	listenAddr := getEnv("LISTEN_ADDR", ":8080")
 
-	server := gateway.NewServer(workerAddr)
+	listenAddr := getEnv("LISTEN_ADDR", ":8080")
+	grpcAddr := getEnv("GRPC_ADDR", ":9090")
+	redisAddr := getEnv("REDIS_ADDR", "localhost:6379")
+	workersRaw := getEnv("WORKERS", "")
+	registerToken := getEnv("REGISTER_TOKEN", "")
+
+	s := store.NewRedis(redisAddr)
+
+	if err := s.Ping(context.Background()); err != nil {
+		log.Fatalf("cannot reach Redis at %s: %v", redisAddr, err)
+	}
+	log.Printf("connected to Redis at %s", redisAddr)
+
+	pool := gateway.NewPool()
+	for _, w := range parseWorkers(workersRaw) {
+		pool.Add(w)
+		log.Printf("seeded worker %s at %s (grpc %s)", w.ID, w.WSAddr, w.GRPCAddr)
+	}
+
+	server := gateway.NewServer(pool, s)
+	server.SetRegisterToken(registerToken)
+
+	if registerToken == "" {
+		log.Printf("REGISTER_TOKEN is empty: any process that can reach %s may register as a worker", grpcAddr)
+	}
+
+	go func() {
+		if err := server.StartGRPC(grpcAddr); err != nil {
+			log.Fatalf("gateway gRPC failed: %v", err)
+		}
+	}()
+
+	server.StartHealthMonitor(context.Background(), gateway.HealthConfig{})
+
 	if err := server.Start(listenAddr); err != nil {
 		log.Fatalf("gateway failed: %v", err)
 	}
@@ -22,4 +57,20 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+func parseWorkers(raw string) []*gateway.WorkerInfo {
+	var workers []*gateway.WorkerInfo
+	for _, entry := range strings.Split(raw, ",") {
+		parts := strings.Split(entry, "|")
+		if len(parts) != 3 {
+			continue
+		}
+		workers = append(workers, &gateway.WorkerInfo{
+			ID:       parts[0],
+			WSAddr:   parts[1],
+			GRPCAddr: parts[2],
+		})
+	}
+	return workers
 }
