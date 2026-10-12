@@ -160,7 +160,7 @@ docker build --build-arg CMD=./cmd/gateway -t ws-migrator/gateway .
 kubectl apply -f deploy/k8s/
 ```
 
-> **Warning:** replace `replace-me-with-a-random-string` in `deploy/k8s/secret.example.yaml` with a random token **before deploying**.
+> **Note:** replace `replace-me-with-a-random-string` in `deploy/k8s/secret.example.yaml` with a random token **before deploying**.
 
 ## How It Works
 
@@ -205,7 +205,7 @@ go test -tags e2e ./test/e2e/ -v -timeout 40m
 
 The end-to-end suite runs real processes and Redis on Docker Compose and Kind. It covers drains, killed workers, a Redis outage, rolling restarts and scaling.
 
-> **Warning:** the E2E tests **create and remove** a Docker Compose project and a Kind cluster named **`wsm-e2e`**. Don't run them if you have resources with that name you want to keep.
+> **Note:** the E2E tests **create and remove** a Docker Compose project and a Kind cluster named **`wsm-e2e`**. Don't run them if you have resources with that name you want to keep.
 
 ## Future Work
 
