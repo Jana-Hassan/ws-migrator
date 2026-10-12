@@ -23,6 +23,7 @@ spec:
       containers:
         - name: worker
           image: ws-migrator/worker:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - name: ws
               containerPort: 8081

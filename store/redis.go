@@ -13,6 +13,8 @@ const (
 	sessionPrefix  = "session:"
 	sessionTTL     = 24 * time.Hour
 	snapshotPrefix = "snapshot:"
+	redisTimeout   = time.Second
+	callTimeout    = 2 * time.Second
 	snapshotTTL    = 1 * time.Hour
 )
 
@@ -23,7 +25,11 @@ type RedisStore struct {
 func NewRedis(addr string) *RedisStore {
 	return &RedisStore{
 		client: redis.NewClient(&redis.Options{
-			Addr: addr,
+			Addr:         addr,
+			DialTimeout:  redisTimeout,
+			ReadTimeout:  redisTimeout,
+			WriteTimeout: redisTimeout,
+			MaxRetries:   1,
 		}),
 	}
 }
@@ -37,6 +43,9 @@ func (s *RedisStore) snapshotKey(sessionID string) string {
 }
 
 func (s *RedisStore) SaveSnapshot(ctx context.Context, sessionID string, snap Snapshot) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	key := s.snapshotKey(sessionID)
 
 	err := s.client.HSet(ctx, key, "state", snap.State, "applied_seq", snap.AppliedSeq, "outbox", snap.Outbox).Err()
@@ -51,6 +60,9 @@ func (s *RedisStore) SaveSnapshot(ctx context.Context, sessionID string, snap Sn
 }
 
 func (s *RedisStore) LoadSnapshot(ctx context.Context, sessionID string) (*Snapshot, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	fields, err := s.client.HGetAll(ctx, s.snapshotKey(sessionID)).Result()
 	if err != nil {
 		return nil, fmt.Errorf("load snapshot %s: %w", sessionID, err)
@@ -72,6 +84,9 @@ func (s *RedisStore) LoadSnapshot(ctx context.Context, sessionID string) (*Snaps
 }
 
 func (s *RedisStore) DeleteSnapshot(ctx context.Context, sessionID string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	err := s.client.Del(ctx, s.snapshotKey(sessionID)).Err()
 	if err != nil {
 		return fmt.Errorf("delete snapshot %s: %w", sessionID, err)
@@ -80,6 +95,9 @@ func (s *RedisStore) DeleteSnapshot(ctx context.Context, sessionID string) error
 }
 
 func (s *RedisStore) Save(ctx context.Context, data *SessionData) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	key := s.key(data.ID)
 
 	err := s.client.HSet(ctx, key,
@@ -102,6 +120,9 @@ func (s *RedisStore) Save(ctx context.Context, data *SessionData) error {
 
 // reads session data from redis by id
 func (s *RedisStore) Load(ctx context.Context, sessionID string) (*SessionData, error) {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	key := s.key(sessionID)
 
 	fields, err := s.client.HGetAll(ctx, key).Result()
@@ -127,6 +148,9 @@ func (s *RedisStore) Load(ctx context.Context, sessionID string) (*SessionData, 
 }
 
 func (s *RedisStore) Delete(ctx context.Context, sessionID string) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	err := s.client.Del(ctx, s.key(sessionID)).Err()
 	if err != nil {
 		return fmt.Errorf("delete session %s: %w", sessionID, err)
@@ -136,5 +160,8 @@ func (s *RedisStore) Delete(ctx context.Context, sessionID string) error {
 
 // checks if redis is reachable
 func (s *RedisStore) Ping(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, callTimeout)
+	defer cancel()
+
 	return s.client.Ping(ctx).Err()
 }

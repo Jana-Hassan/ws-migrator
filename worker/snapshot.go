@@ -35,9 +35,10 @@ func (w *Worker) snapshotAll(ctx context.Context) {
 		}
 
 		if err := w.store.SaveSnapshot(ctx, s.id, snap); err != nil {
+			s.markDirty()
 			w.snapshotFailures.Add(1)
-			log.Printf("[worker-%s] snapshot %s failed: %v", w.id, s.id, err)
-			continue
+			log.Printf("[worker-%s] snapshot %s failed, retrying all sessions next tick: %v", w.id, s.id, err)
+			return
 		}
 		w.snapshotsWritten.Add(1)
 	}

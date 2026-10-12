@@ -1,0 +1,59 @@
+x-worker: &worker
+  build:
+    context: ../..
+    args:
+      CMD: ./test/counter
+  stop_grace_period: 45s
+  depends_on:
+    - gateway
+
+x-worker-env: &worker-env
+  LISTEN_ADDR: ":8081"
+  GRPC_ADDR: ":9091"
+  GATEWAY_ADDR: gateway:9090
+  REDIS_ADDR: redis:6379
+  REGISTER_TOKEN: e2e-token
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+
+  gateway:
+    build:
+      context: ../..
+      args:
+        CMD: ./cmd/gateway
+    ports:
+      - "18080:8080"
+    environment:
+      LISTEN_ADDR: ":8080"
+      GRPC_ADDR: ":9090"
+      REDIS_ADDR: redis:6379
+      REGISTER_TOKEN: e2e-token
+    depends_on:
+      - redis
+
+  worker-1:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-1
+      WS_ADVERTISE: ws://worker-1:8081/ws
+      GRPC_ADVERTISE: worker-1:9091
+
+  worker-2:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-2
+      WS_ADVERTISE: ws://worker-2:8081/ws
+      GRPC_ADVERTISE: worker-2:9091
+
+  worker-3:
+    <<: *worker
+    environment:
+      <<: *worker-env
+      WORKER_ID: worker-3
+      WS_ADVERTISE: ws://worker-3:8081/ws
+      GRPC_ADVERTISE: worker-3:9091

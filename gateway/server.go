@@ -635,12 +635,6 @@ func (s *Server) doRecoverSession(session *Session) bool {
 	deadWorker := session.WorkerID
 	session.mu.Unlock()
 
-	target, ok := s.pickWorker(deadWorker)
-	if !ok {
-		log.Printf("recovery failed: no healthy worker for session %s", session.ID)
-		return false
-	}
-
 	snap, err := s.store.LoadSnapshot(ctx, session.ID)
 	if err != nil {
 		log.Printf("recovery failed: could not load snapshot for %s: %v", session.ID, err)
@@ -650,16 +644,24 @@ func (s *Server) doRecoverSession(session *Session) bool {
 		snap = &store.Snapshot{}
 	}
 
-	log.Printf("recovering session %s from %s onto %s (%d state bytes, applied seq %d, %d outbox bytes)",
-		session.ID, deadWorker, target.ID, len(snap.State), snap.AppliedSeq, len(snap.Outbox))
+	tried := map[string]bool{deadWorker: true}
+	for {
+		target, ok := s.pickWorkerExcept(tried)
+		if !ok {
+			log.Printf("recovery failed: no healthy worker left for session %s", session.ID)
+			return false
+		}
+		tried[target.ID] = true
 
-	if !s.placeOnWorker(ctx, session, target, *snap) {
-		return false
+		log.Printf("recovering session %s from %s onto %s (%d state bytes, applied seq %d, %d outbox bytes)",
+			session.ID, deadWorker, target.ID, len(snap.State), snap.AppliedSeq, len(snap.Outbox))
+
+		if s.placeOnWorker(ctx, session, target, *snap) {
+			s.saveSession(ctx, session, "active")
+			log.Printf("recovery complete: session %s now on %s", session.ID, target.ID)
+			return true
+		}
 	}
-
-	s.saveSession(ctx, session, "active")
-	log.Printf("recovery complete: session %s now on %s", session.ID, target.ID)
-	return true
 }
 
 func (s *Server) saveSession(ctx context.Context, session *Session, status string) {

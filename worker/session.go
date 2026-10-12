@@ -26,6 +26,12 @@ type session struct {
 	outbox     []outFrame
 }
 
+func (s *session) markDirty() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dirty = true
+}
+
 func (s *session) emit(f outFrame) error {
 	s.outbox = append(s.outbox, f)
 	return s.write(int(f.messageType), frame.EncodeDown(f.kind, f.key, f.payload))

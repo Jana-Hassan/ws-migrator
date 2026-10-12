@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -412,7 +413,9 @@ type fakeWorker struct {
 	beats chan struct{}
 	srv   *grpc.Server
 
-	rejectRestore bool
+	rejectRestore atomic.Bool
+	restoreDelay  atomic.Int64
+	slam          atomic.Bool
 
 	wsURL string
 	wsLis net.Listener
@@ -421,7 +424,8 @@ type fakeWorker struct {
 }
 
 func (f *fakeWorker) Restore(ctx context.Context, req *migratorpb.RestoreRequest) (*migratorpb.RestoreResponse, error) {
-	if f.rejectRestore {
+	time.Sleep(time.Duration(f.restoreDelay.Load()))
+	if f.rejectRestore.Load() {
 		return &migratorpb.RestoreResponse{Ok: false, Error: "restore refused"}, nil
 	}
 	return &migratorpb.RestoreResponse{Ok: true}, nil
@@ -485,7 +489,23 @@ func (c *cluster) addRestoreRejectingWorker(id string) *fakeWorker {
 	c.t.Helper()
 
 	f := c.addFakeWorkerOn(id, "ws://127.0.0.1:1/ws", nil)
-	f.rejectRestore = true
+	f.rejectRestore.Store(true)
+	return f
+}
+
+func (c *cluster) addSlowRestoreWorker(id string, delay time.Duration) *fakeWorker {
+	c.t.Helper()
+
+	f := c.addFakeWorkerOn(id, "ws://127.0.0.1:1/ws", nil)
+	f.restoreDelay.Store(int64(delay))
+	return f
+}
+
+func (c *cluster) addSlammingWorker(id string) *fakeWorker {
+	c.t.Helper()
+
+	f := c.addBlackHoleWorker(id)
+	f.slam.Store(true)
 	return f
 }
 
@@ -519,6 +539,10 @@ func (c *cluster) addFakeWorkerOn(id, wsURL string, wsLis net.Listener) *fakeWor
 		mux.HandleFunc("/ws", func(wr http.ResponseWriter, r *http.Request) {
 			conn, err := upgrader.Upgrade(wr, r, nil)
 			if err != nil {
+				return
+			}
+			if f.slam.Load() {
+				conn.Close()
 				return
 			}
 			<-r.Context().Done()

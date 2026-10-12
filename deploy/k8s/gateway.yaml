@@ -19,6 +19,7 @@ spec:
       containers:
         - name: gateway
           image: ws-migrator/gateway:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - name: client
               containerPort: 8080
